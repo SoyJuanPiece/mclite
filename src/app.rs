@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::core::crash;
+use crate::core::updater;
 use crate::core::logging;
 use crate::core::modrinth;
 
@@ -68,6 +69,10 @@ enum Message {
     GameExit(crash::GameExit),
     /// Hay una versión más nueva en GitHub (avisar con toast).
     UpdateAvailable { version: String, url: String },
+    /// El exe nuevo está verificado y en su sitio: reiniciar para aplicarlo.
+    UpdateReady,
+    /// La skin del nick premium se resolvió: aplicarla a la instancia actual.
+    SkinResolved(Vec<u8>),
     Played {
         slug: String,
     },
@@ -281,6 +286,10 @@ pub struct McLiteApp {
     ui_ctx: Option<egui::Context>,
     /// URL del release con la versión nueva (si el aviso de update disparó).
     pub update_url: Option<String>,
+    /// (versión, url) del release disponible, para el botón Actualizar.
+    pub update_available: Option<(String, String)>,
+    /// Fingerprint de la skin aplicada (refrescar la preview en Ajustes).
+    pub skin_fingerprint: String,
     /// Canal hacia la GUI; cada envío despierta el repintado.
     tx: MsgTx,
     rx: Receiver<Message>,
@@ -308,7 +317,7 @@ impl McLiteApp {
     }
 
     /// Comprueba en GitHub si hay release nueva (silencioso si falla o si el
-    /// usuario lo apaga). Abre la página del release con el botón del toast.
+    /// usuario lo apaga). Guarda los datos para el botón Actualizar.
     pub(crate) fn check_for_update(&mut self) {
         if !self.config.check_updates {
             return;
@@ -317,25 +326,63 @@ impl McLiteApp {
         let current = LAUNCHER_VERSION.to_string();
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            let Ok(body) = http.get_string(
-                "https://api.github.com/repos/SoyJuanPiece/mclite/releases/latest",
-            ) else {
-                return; // sin red o GitHub caído: nada que decir
+            let Some(release) = updater::latest_release(&http) else {
+                return; // sin red o release sin assets: nada que decir
             };
-            let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
-                return;
-            };
-            let Some(latest) = json["tag_name"].as_str().and_then(|tag| tag.strip_prefix('v')) else {
-                return;
-            };
-            if latest != current && version_is_newer(latest, &current) {
-                let url = json["html_url"].as_str().unwrap_or_default().to_string();
+            if updater::version_is_newer(&release.version, &current) {
                 tx.send(Message::UpdateAvailable {
-                    version: latest.to_string(),
-                    url,
+                    version: release.version,
+                    url: release.html_url,
                 });
             }
         });
+    }
+
+    /// Descarga + verifica el exe nuevo y prepara el swap. Un `job` normal
+    /// con barra; al verificar, mensaje de reinicio.
+    pub(crate) fn start_update(&mut self) {
+        if self.job.is_some() {
+            return;
+        }
+        let Some((version, _url)) = self.update_available.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let paths = self.paths.clone();
+
+        self.job = Some(Job {
+            label: "Actualizando McLite".into(),
+            phase: "Descargando".into(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        self.error = None;
+
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let progress = Progress::new(GuiSink::new(tx.clone()));
+            let result = (|| -> Result<(), crate::Error> {
+                progress.phase("Consultando el release");
+                let Some(release) = updater::latest_release(&http) else {
+                    return Err(crate::Error::Unsupported(
+                        "no pude leer el último release de GitHub".into(),
+                    ));
+                };
+                progress.phase("Descargando la versión nueva");
+                let new_exe = updater::download_update(&http, &paths, &release)?;
+                progress.phase("Colocando el exe nuevo");
+                match updater::apply_swap(&new_exe) {
+                    Ok(updater::SwapOutcome::Done | updater::SwapOutcome::NeedsHelper) => Ok(()),
+                    Err(err) => Err(err),
+                }
+            })();
+            match result {
+                Ok(()) => tx.send(Message::UpdateReady),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
+        let _ = version; // el label ya lo lleva el Job
     }
 
     /// Muestra una notificación flotante (dura ~4 s, máximo 3 apiladas).
@@ -477,6 +524,8 @@ impl McLiteApp {
             screen_from: None,
             ui_ctx: None,
             update_url: None,
+            update_available: None,
+            skin_fingerprint: String::new(),
             tx,
             rx,
         };
@@ -681,8 +730,19 @@ impl McLiteApp {
             }
             Message::UpdateAvailable { version, url } => {
                 self.status = format!("McLite {version} disponible");
-                self.notify(format!("Nueva versión {version} disponible"), ToastKind::Ok);
-                self.update_url = Some(url);
+                self.update_available = Some((version, url));
+                self.notify(
+                    format!("Nueva versión {} disponible", self.update_available.as_ref().unwrap().0),
+                    ToastKind::Ok,
+                );
+            }
+            Message::UpdateReady => {
+                self.job = None;
+                self.notify("Actualizado: reinicia para usar la versión nueva", ToastKind::Ok);
+            }
+            Message::SkinResolved(bytes) => {
+                self.job = None;
+                self.apply_skin_bytes(bytes);
             }
             Message::Log(line) => self.push_log(line),
         }
@@ -1541,25 +1601,6 @@ impl McLiteApp {
     }
 }
 
-/// Compara versiones "X.Y.Z": true si `candidate` es más nueva que `current`.
-fn version_is_newer(candidate: &str, current: &str) -> bool {
-    let parse = |text: &str| -> Vec<u64> {
-        text.split('.')
-            .map(|part| part.chars().filter(|c| c.is_ascii_digit()).collect::<String>())
-            .filter_map(|part| part.parse().ok())
-            .collect()
-    };
-    let (candidate, current) = (parse(candidate), parse(current));
-    for index in 0..3 {
-        let a = candidate.get(index).copied().unwrap_or(0);
-        let b = current.get(index).copied().unwrap_or(0);
-        if a != b {
-            return a > b;
-        }
-    }
-    false
-}
-
 /// El slug de la instancia que se pidió lanzar (para marcar «última partida»).
 fn request_slug(request: &PlayRequest) -> String {
     request
@@ -1699,8 +1740,14 @@ impl McLiteApp {
             match extension.as_str() {
                 "mrpack" => self.install_local_mrpack(path),
                 "jar" => self.install_local_jar(path),
+                "png" => {
+                    match crate::core::skins::from_local_png(&path) {
+                        Ok(bytes) => self.apply_skin_bytes(bytes),
+                        Err(err) => self.error = Some(err.to_string()),
+                    }
+                }
                 other => self.notify(
-                    format!("No sé instalar .{other} (prueba .mrpack o .jar)"),
+                    format!("No sé instalar .{other} (prueba .mrpack, .jar o .png de skin)"),
                     ToastKind::Error,
                 ),
             }
@@ -1718,6 +1765,152 @@ impl McLiteApp {
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_else(|| "Pack local".to_string());
         self.start_pack_install_from_file(path, name);
+    }
+
+    /// Instala CustomSkinLoader en la instancia (soporte de skins offline).
+    /// Igual que Sodium: baja el jar a mods/ desde Modrinth.
+    pub(crate) fn install_skin_support(&mut self, slug: &str) {
+        if self.job.is_some() {
+            return;
+        }
+        let Some(instance) = self.store.find(slug).cloned() else {
+            return;
+        };
+        if matches!(instance.loader, LoaderKind::Vanilla | LoaderKind::OptiFine) {
+            self.notify(
+                "Las skins offline necesitan Fabric/Forge (mod CustomSkinLoader)",
+                ToastKind::Error,
+            );
+            return;
+        }
+        let paths = self.paths.clone();
+        let tx = self.tx.clone();
+        let game_dir = instance.game_dir(&paths);
+        let mc = instance.mc_version.clone();
+        let loader_name = match instance.loader {
+            LoaderKind::Fabric => "fabric",
+            LoaderKind::Quilt => "quilt",
+            LoaderKind::Forge => "forge",
+            LoaderKind::NeoForge => "neoforge",
+            _ => "fabric",
+        }
+        .to_string();
+
+        self.job = Some(Job {
+            label: "Skins".into(),
+            phase: "Buscando CustomSkinLoader".into(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        self.error = None;
+
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let progress = Progress::new(GuiSink::new(tx.clone()));
+            let result = (|| -> Result<String, crate::Error> {
+                // CSL en Modrinth: proyecto "customskinloader". La API v2 acepta
+                // el slug en lugar del id. Parámetros directos, no facets (ver
+                // nota en sodium.rs: los facets filtran mal en este endpoint).
+                let url = format!(
+                    "{}/v2/project/customskinloader/version?game_versions={}&loaders={}&limit=1",
+                    modrinth::API,
+                    modrinth::urlencode(&serde_json::json!([mc]).to_string()),
+                    modrinth::urlencode(&serde_json::json!([loader_name]).to_string()),
+                );
+                let versions: Vec<modrinth::PackVersion> = http
+                    .get_json_ua(&url, modrinth::USER_AGENT)
+                    .map_err(|e| crate::Error::Http(format!("CustomSkinLoader para {mc}: {e}")))?;
+                let Some(version) = versions.first() else {
+                    return Ok(format!(
+                        "CustomSkinLoader aún no soporta Minecraft {mc} con {loader_name}: \
+                         prueba otra versión o arrastra el jar del mod"
+                    ));
+                };
+                let file = version
+                    .files
+                    .iter()
+                    .find(|file| file.primary)
+                    .or_else(|| version.files.first())
+                    .ok_or_else(|| crate::Error::Missing("fichero de CustomSkinLoader".into()))?;
+                let dest = game_dir.join("mods").join(&file.filename);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| crate::Error::io(parent, e))?;
+                }
+                progress.phase("Descargando CustomSkinLoader");
+                http.download(&Download::new(&file.url, &dest))?;
+                Ok(format!(
+                    "Soporte de skins listo: arrastra un .png o usa el nick premium en Ajustes"
+                ))
+            })();
+            match result {
+                Ok(message) => {
+                    tx.send(Message::JobDone(message));
+                }
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
+    }
+
+    /// Aplica una skin (bytes PNG) a la instancia seleccionada: la deja donde
+    /// CustomSkinLoader la lee y refresca la preview de Ajustes.
+    pub(crate) fn apply_skin_bytes(&mut self, bytes: Vec<u8>) {
+        let Some(slug) = self.selected.clone() else {
+            self.notify(
+                "Selecciona una instancia antes de aplicar la skin",
+                ToastKind::Error,
+            );
+            return;
+        };
+        let Some(instance) = self.store.find(&slug) else {
+            return;
+        };
+        if matches!(instance.loader, LoaderKind::Vanilla | LoaderKind::OptiFine) {
+            self.notify(
+                "Vanilla offline no soporta skins: usa Fabric/Forge con el soporte instalado",
+                ToastKind::Error,
+            );
+            return;
+        }
+        let nick = self.config.username_or_default();
+        let game_dir = instance.game_dir(&self.paths);
+        match crate::core::skins::apply_to_instance(&bytes, &nick, &game_dir) {
+            Ok(_) => {
+                self.skin_fingerprint = crate::core::skins::fingerprint(&bytes);
+                self.notify(
+                    format!("Skin aplicada a «{}»", instance.name),
+                    ToastKind::Ok,
+                );
+            }
+            Err(err) => self.error = Some(err.to_string()),
+        }
+    }
+
+    /// Baja la skin del nick premium (si existe) y la aplica.
+    pub(crate) fn apply_premium_skin(&mut self) {
+        let nick = self.config.username_or_default();
+        let paths = self.paths.clone();
+        let tx = self.tx.clone();
+        self.job = Some(Job {
+            label: "Skin".into(),
+            phase: format!("Buscando la skin de {nick}"),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let result = crate::core::skins::resolve_for_nick(&http, &paths, &nick)
+                .ok_or_else(|| {
+                    crate::Error::Unsupported(format!(
+                        "el nick «{nick}» no existe o no tiene skin premium"
+                    ))
+                });
+            match result {
+                Ok(bytes) => tx.send(Message::SkinResolved(bytes)),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
     }
 
     /// Copia un .jar a mods/ de la instancia seleccionada (solo Fabric).

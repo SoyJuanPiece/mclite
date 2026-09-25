@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use egui::Ui;
 
 use crate::app::McLiteApp;
+use crate::LAUNCHER_VERSION;
 use crate::core::shell;
 use crate::ui::{theme, widgets};
 
@@ -29,6 +30,9 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let mut detect = false;
     let mut open: Option<PathBuf> = None;
     let mut accent_change: Option<crate::ui::theme::Accent> = None;
+    let mut start_update = false;
+    let mut apply_premium = false;
+    let mut remove_skin = false;
     let ctx = ui.ctx().clone();
 
     egui::ScrollArea::vertical()
@@ -39,23 +43,49 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.label(theme::title("Ajustes"));
             ui.add_space(10.0);
 
-            // ── Apariencia ───────────────────────────────────────────────────
+            // ── Actualizaciones ────────────────────────────────────────────
             card(ui, "ACTUALIZACIONES", |ui| {
                 let mut check = app.config.check_updates;
                 if ui
                     .checkbox(
                         &mut check,
-                        "Avisar cuando salga una versión nueva (GitHub)",
+                        "Buscar versiones nuevas al arrancar (GitHub)",
                     )
                     .changed()
                 {
                     app.config.check_updates = check;
                     config_dirty = true;
                 }
-                if let Some(url) = &app.update_url {
-                    ui.label(theme::muted(format!(
-                        "Hay una versión nueva: {url}"
-                    )));
+                match app.update_available.clone() {
+                    Some((version, _url)) => {
+                        ui.label(theme::muted(format!(
+                            "Estás en {LAUNCHER_VERSION} — hay {version} disponible"
+                        )));
+                        let updating = app.job.is_some();
+                        if ui
+                            .add_enabled(
+                                !updating,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("Actualizar a {version}"))
+                                        .family(theme::semibold()),
+                                )
+                                .fill(theme::accent())
+                                .corner_radius(egui::CornerRadius::same(6)),
+                            )
+                            .clicked()
+                        {
+                            start_update = true;
+                        }
+                        if updating {
+                            ui.spinner();
+                            ui.label(theme::muted("Descargando la versión nueva…"));
+                        }
+                    }
+                    None => {
+                        ui.label(theme::muted(format!(
+                            "Estás en la última versión ({LAUNCHER_VERSION})"
+                        )));
+                    }
                 }
             });
 
@@ -104,6 +134,44 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 ui.label(theme::muted(
                     "Sin login de Microsoft: el nick define tu nombre y UUID local.",
                 ));
+                ui.add_space(6.0);
+                // Preview: cara de la skin cacheada del nick (o avatar inicial).
+                let nick = app.config.username_or_default();
+                let cached = app
+                    .paths
+                    .root()
+                    .join("cache")
+                    .join("skins")
+                    .join(format!("{}.png", crate::core::paths::sanitize(&nick)));
+                if let Ok(bytes) = std::fs::read(&cached) {
+                    if let Some(pixels) = crate::core::skins::face_rgba(&bytes, 6) {
+                        let size = [8 * 6, 8 * 6];
+                        let image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+                        let texture = ui
+                            .ctx()
+                            .load_texture("skin-preview", image, egui::TextureOptions::NEAREST);
+                        ui.add(egui::Image::new((texture.id(), texture.size_vec2())));
+                    }
+                } else {
+                    theme::avatar(ui, &nick, 48.0);
+                }
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(&nick).strong());
+                    ui.label(theme::muted(
+                        "La skin la carga el mod CustomSkinLoader (botón Skins en cada instancia)",
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button("Usar la skin de mi nick (premium)").clicked() {
+                            apply_premium = true;
+                        }
+                        if ui.button("Quitar skin").clicked() {
+                            remove_skin = true;
+                        }
+                    });
+                    ui.label(theme::muted(
+                        "También puedes arrastrar un .png de skin a la ventana",
+                    ));
+                });
             });
 
             // ── Valores por defecto ──────────────────────────────────────────
@@ -268,6 +336,34 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     }
     if detect {
         app.detect_javas();
+    }
+    if start_update {
+        app.start_update();
+    }
+    if apply_premium {
+        app.apply_premium_skin();
+    }
+    if remove_skin {
+        let nick = app.config.username_or_default();
+        let cached = app
+            .paths
+            .root()
+            .join("cache")
+            .join("skins")
+            .join(format!("{}.png", crate::core::paths::sanitize(&nick)));
+        let _ = std::fs::remove_file(&cached);
+        let _ = cached;
+        if let Some(slug) = app.selected.clone() {
+            if let Some(instance) = app.store.find(&slug) {
+                let dest = instance
+                    .game_dir(&app.paths)
+                    .join("CustomSkinLoader")
+                    .join("LocalSkin")
+                    .join(format!("{}.png", crate::core::paths::sanitize(&nick)));
+                let _ = std::fs::remove_file(dest);
+            }
+        }
+        app.notify("Skin quitada", crate::app::ToastKind::Ok);
     }
     if let Some(dir) = open {
         if let Err(err) = shell::open_in_explorer(&dir) {

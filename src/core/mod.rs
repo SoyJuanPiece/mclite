@@ -26,6 +26,8 @@ pub mod process;
 pub mod progress;
 pub mod rules;
 pub mod runtime;
+pub mod skins;
 pub mod shell;
 pub mod sodium;
+pub mod updater;
 pub mod version_json;

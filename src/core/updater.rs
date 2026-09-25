@@ -1,0 +1,246 @@
+//! Auto-update del launcher (A del plan): GitHub releases + verificación SHA-256
+//! + swap del exe en ejecución.
+//!
+//! En Windows un exe en ejecución no se puede borrar/sobrescribir, pero SÍ
+//! renombrar. Estrategia (la de Chromium/VS Code): bajar el nuevo a
+//! `update/mclite.exe.new`, verificarlo, renombrar el actual a
+//! `mclite.exe.old`, copiar el nuevo a `mclite.exe` y — si el rename falló
+//! (antivirus) — dejar un helper `.bat` que completa el cambio tras la salida.
+//! El arranque limpia `.old` residuales.
+
+use serde::Deserialize;
+
+use crate::core::error::{Error, Result};
+use crate::core::http::{Download, HttpClient};
+use crate::core::paths::Paths;
+
+const RELEASES_API: &str = "https://api.github.com/repos/SoyJuanPiece/mclite/releases/latest";
+
+/// Datos del último release publicadado en GitHub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseInfo {
+    /// Versión sin la "v" inicial ("0.4.0").
+    pub version: String,
+    pub exe_url: String,
+    pub sha256_url: String,
+    pub html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+/// Consulta el último release. `None` si no hay red, GitHub cae, o el release
+/// no trae el par `mclite.exe` + `mclite.exe.sha256` (releases antiguos).
+pub fn latest_release(http: &HttpClient) -> Option<ReleaseInfo> {
+    let body = http.get_string_ua(RELEASES_API, crate::core::modrinth::USER_AGENT).ok()?;
+    let release: GhRelease = serde_json::from_str(&body).ok()?;
+    let version = release.tag_name.strip_prefix('v')?.to_string();
+    let find = |suffix: &str| {
+        release
+            .assets
+            .iter()
+            .find(|asset| asset.name == format!("mclite.exe{suffix}"))
+            .map(|asset| asset.browser_download_url.clone())
+    };
+    Some(ReleaseInfo {
+        version,
+        exe_url: find("")?,
+        sha256_url: find(".sha256")?,
+        html_url: release.html_url,
+    })
+}
+
+/// ¿Es `candidate` una versión más nueva que `current`? ("0.4.0" vs "0.3.0").
+pub fn version_is_newer(candidate: &str, current: &str) -> bool {
+    let parse = |text: &str| -> Vec<u64> {
+        text.split('.')
+            .map(|part| {
+                part.chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>()
+            })
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    };
+    let (candidate, current) = (parse(candidate), parse(current));
+    for index in 0..3 {
+        let a = candidate.get(index).copied().unwrap_or(0);
+        let b = current.get(index).copied().unwrap_or(0);
+        if a != b {
+            return a > b;
+        }
+    }
+    false
+}
+
+/// Lee "abc123…  mclite.exe" y devuelve solo el hash en minúsculas.
+pub fn parse_sha256_file(content: &str) -> Option<String> {
+    content
+        .split_whitespace()
+        .next()
+        .filter(|hash| hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|hash| hash.to_ascii_lowercase())
+}
+
+/// Hash SHA-256 de un fichero, en hex minúsculas.
+pub fn sha256_of(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).map_err(|err| Error::io(path, err))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Carpeta de trabajo del updater.
+fn update_dir(paths: &Paths) -> std::path::PathBuf {
+    paths.root().join("update")
+}
+
+/// Descarga el exe nuevo a `update/mclite.exe.new` y verifica su hash.
+/// Devuelve la ruta del fichero verificado. Nada toca el exe actual.
+pub fn download_update(
+    http: &HttpClient,
+    paths: &Paths,
+    release: &ReleaseInfo,
+) -> Result<std::path::PathBuf> {
+    let dir = update_dir(paths);
+    std::fs::create_dir_all(&dir).map_err(|err| Error::io(&dir, err))?;
+    let new_exe = dir.join("mclite.exe.new");
+    let hash_file = dir.join("release.sha256");
+
+    http.download(&Download::new(&release.sha256_url, &hash_file))?;
+    let expected = parse_sha256_file(
+        &std::fs::read_to_string(&hash_file).map_err(|err| Error::io(&hash_file, err))?,
+    )
+    .ok_or_else(|| crate::Error::Unsupported("el .sha256 del release no es válido".into()))?;
+
+    http.download(&Download::new(&release.exe_url, &new_exe))?;
+    let actual = sha256_of(&new_exe)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(&new_exe);
+        return Err(crate::Error::Unsupported(format!(
+            "el exe descargado no coincide con su hash ({actual})"
+        )));
+    }
+    Ok(new_exe)
+}
+
+/// Resultado del intercambio del binario.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapOutcome {
+    /// Todo hecho: el exe actual ya es el nuevo (tras el reinicio).
+    Done,
+    /// El rename falló (antivirus): queda un .bat que completará al salir.
+    NeedsHelper,
+}
+
+/// Intercambia el exe en ejecución por el nuevo (ya verificado).
+/// Solo toca el exe si el rename del actual tuvo éxito.
+pub fn apply_swap(new_exe: &std::path::Path) -> Result<SwapOutcome> {
+    use std::process::Command;
+
+    let current = std::env::current_exe().map_err(|err| {
+        crate::Error::Unsupported(format!("no pude localizar el exe en ejecución: {err}"))
+    })?;
+    let Some(exe_dir) = current.parent() else {
+        return Err(crate::Error::Unsupported(
+            "el exe está en la raíz del sistema de archivos".into(),
+        ));
+    };
+    let old = exe_dir.join("mclite.exe.old");
+
+    // Renombrar el vivo; permitido en ejecución (Windows), y aquí es la prueba
+    // de que podemos poner el nuevo en su sitio sin dejar el launcher roto.
+    let _ = std::fs::remove_file(&old);
+    let renamed = std::fs::rename(&current, &old);
+
+    if renamed.is_ok() {
+        std::fs::copy(new_exe, &current).map_err(|err| Error::io(&current, err))?;
+        Ok(SwapOutcome::Done)
+    } else {
+        // Antivirus u otra cosa sujeta el fichero: helper que completa al salir.
+        let helper = exe_dir.join("mclite-update.bat");
+        let script = format!(
+            "@echo off\r\n:wait\r\ntasklist /FI \"IMAGENAME eq mclite.exe\" | find /I \"mclite.exe\" >nul && (timeout /T 1 /NOBREAK >nul & goto wait)\r\nif exist \"{old}\" del /F /Q \"{old}\"\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nif exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
+            old = old.display(),
+            new_exe = new_exe.display(),
+            current = current.display(),
+        );
+        std::fs::write(&helper, script).map_err(|err| Error::io(&helper, err))?;
+        let mut command = Command::new("cmd");
+        command.args(["/C", &helper.display().to_string()]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0000_0008); // DETACHED_PROCESS
+        }
+        let _ = command.spawn();
+        Ok(SwapOutcome::NeedsHelper)
+    }
+}
+
+/// Limpieza al arrancar: si quedó un `.old` de una actualización previa y ya
+/// no está bloqueado, fuera. Nunca es fatal.
+pub fn cleanup_old() {
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(exe_dir) = current.parent() {
+            let _ = std::fs::remove_file(exe_dir.join("mclite.exe.old"));
+            let _ = std::fs::remove_file(exe_dir.join("mclite-update.bat"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compara_versiones() {
+        assert!(version_is_newer("0.4.0", "0.3.0"));
+        assert!(version_is_newer("0.3.1", "0.3.0"));
+        assert!(version_is_newer("1.0.0", "0.9.9"));
+        assert!(!version_is_newer("0.3.0", "0.3.0"));
+        assert!(!version_is_newer("0.2.9", "0.3.0"));
+        // Con "v" delante o letras raras, se filtran los dígitos por posición.
+        assert!(version_is_newer("0.4.0-beta", "0.3.0"));
+    }
+
+    #[test]
+    fn parsea_el_fichero_sha256() {
+        let content = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  mclite.exe\n";
+        let hash = parse_sha256_file(content).unwrap();
+        assert_eq!(hash.len(), 64);
+        assert_eq!(hash, hash.to_lowercase());
+        assert!(parse_sha256_file("corto").is_none());
+        assert!(parse_sha256_file("").is_none());
+    }
+
+    #[test]
+    fn calcula_sha256_conocido() {
+        let dir = std::env::temp_dir().join("mclite-updater-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("vacio.txt");
+        std::fs::write(&file, b"").unwrap();
+        // SHA-256 del fichero vacío, constante conocida.
+        assert_eq!(
+            sha256_of(&file).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

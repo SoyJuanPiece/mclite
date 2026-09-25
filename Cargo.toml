@@ -1,6 +1,6 @@
 [package]
 name = "mclite"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Launcher lite de Minecraft para Windows (nativo, sin runtime)"
 authors = ["Juan Vivenes"]
@@ -10,9 +10,12 @@ build = "build.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
 ureq = "3"
 zip = { version = "8", default-features = true }
 sha1 = "0.11"
+sha2 = "0.11"
 md-5 = "0.11"
 dirs = "7"
 regex-lite = "0.1"

@@ -24,7 +24,7 @@ use crate::loaders::LoaderKind;
 
 pub const API: &str = "https://api.modrinth.com";
 /// La CLI de modrinth pide identificar el cliente: formato `repo/version`.
-const USER_AGENT: &str = concat!("mclite/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("mclite/", env!("CARGO_PKG_VERSION"));
 
 // ── Búsqueda ─────────────────────────────────────────────────────────────────
 

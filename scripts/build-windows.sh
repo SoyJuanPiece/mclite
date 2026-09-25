@@ -65,8 +65,11 @@ run_in_nix() {
 run_in_nix
 
 if [[ -f "$OUT" ]]; then
+  # Hash para el auto-update: <sha256>  <nombre> (formato sha256sum), junto al exe.
+  sha256sum "$OUT" | sed 's#target/x86_64-pc-windows-gnu/release/##' > "$OUT.sha256"
   echo
   echo "OK: $OUT ($(numfmt --to=iec --suffix=B "$(stat -c%s "$OUT")" 2>/dev/null || stat -c%s "$OUT"))"
+  echo "    hash: $(cut -d' ' -f1 "$OUT.sha256")"
 else
   echo "ERROR: build finished but $OUT not found" >&2
   exit 1
