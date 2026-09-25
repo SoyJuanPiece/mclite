@@ -106,12 +106,17 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         if !matches(&instance.name, &instance.mc_version) {
             continue;
         }
+        // El icono pasa por la caché de disco: 2ª sesión = instantáneo y offline.
+        let icon = instance
+            .icon
+            .as_deref()
+            .map(|url| crate::core::icons::resolve(&app.paths, url));
         let row = InstanceRow {
             slug: instance.slug.clone(),
             name: instance.name.clone(),
             sub: format!("{} · {}", instance.mc_version, instance.loader.label()),
             loader: instance.loader,
-            icon: instance.icon.clone(),
+            icon,
             selected: app.selected.as_deref() == Some(instance.slug.as_str()),
         };
         if instance.from_pack.is_some() {

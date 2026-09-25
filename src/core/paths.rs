@@ -161,6 +161,11 @@ impl Paths {
         self.root.join("packs")
     }
 
+    /// Caché de iconos remotos (Modrinth), para no re-descargarlos cada sesión.
+    pub fn cache_icons(&self) -> PathBuf {
+        self.root.join("cache").join("icons")
+    }
+
     pub fn config_file(&self) -> PathBuf {
         self.root.join("config.json")
     }

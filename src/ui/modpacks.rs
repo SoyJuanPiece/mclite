@@ -26,7 +26,11 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 pack.description.clone(),
                 pack.downloads,
                 pack.versions.clone(),
-                pack.icon_url.clone(),
+                // Caché en disco: la rejilla abre instantánea la 2ª vez.
+                pack.icon_url
+                    .as_deref()
+                    .filter(|url| !url.is_empty())
+                    .map(|url| crate::core::icons::resolve(&app.paths, url)),
             )
         })
         .collect();
@@ -59,7 +63,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     action = Some(Action::Back);
                 }
                 ui.add_space(8.0);
-                pack_header(ui, detail, &versions, loading, &mut action);
+                pack_header(ui, detail, &versions, loading, &mut action, &app.paths.clone());
                 ui.add_space(12.0);
                 widgets::section(ui, "DESCRIPCIÓN");
                 ui.add_space(2.0);
@@ -138,7 +142,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                             ui.set_max_width(230.0);
                             ui.vertical(|ui| {
                                 // Icono del pack (100×100). Mientras carga, cuadro vacío.
-                                match icon.as_deref().filter(|url| !url.is_empty()) {
+                                match icon.as_deref() {
                                     Some(url) => {
                                         ui.add(
                                             egui::Image::from_uri(url)
@@ -238,10 +242,16 @@ fn pack_header(
     versions: &[(String, String, String)],
     loading: bool,
     action: &mut Option<Action>,
+    paths: &crate::core::paths::Paths,
 ) {
     theme::card(ui, |ui| {
             ui.horizontal(|ui| {
-                match detail.icon_url.as_deref().filter(|url| !url.is_empty()) {
+                let icon_uri = detail
+                    .icon_url
+                    .as_deref()
+                    .filter(|url| !url.is_empty())
+                    .map(|url| crate::core::icons::resolve(paths, url));
+                match icon_uri.as_deref() {
                     Some(url) => {
                         ui.add(
                             egui::Image::from_uri(url)

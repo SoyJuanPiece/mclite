@@ -10,6 +10,7 @@ pub mod crash;
 pub mod endpoints;
 pub mod error;
 pub mod hash;
+pub mod icons;
 pub mod http;
 pub mod install;
 pub mod instance;

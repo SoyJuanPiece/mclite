@@ -151,6 +151,10 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     });
     ui.add_space(4.0);
 
+    let icon_uri = instance
+        .icon
+        .as_deref()
+        .map(|url| crate::core::icons::resolve(&app.paths, url));
     hero(
         ui,
         &instance.name,
@@ -163,7 +167,7 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             instance.height
         ),
         &instance.game_dir(&app.paths).display().to_string(),
-        instance.icon.as_deref(),
+        icon_uri.as_deref(),
         instance.loader,
         &instance.mc_version,
         instance.loader_version.as_deref(),

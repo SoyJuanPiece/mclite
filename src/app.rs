@@ -303,46 +303,54 @@ impl McLiteApp {
         self.ui_ctx = Some(ctx);
     }
 
-    /// Muestra una notificación flotante (dura ~4 s).
+    /// Muestra una notificación flotante (dura ~4 s, máximo 3 apiladas).
     pub fn notify(&mut self, text: impl Into<String>, kind: ToastKind) {
         self.toasts.push(Toast {
             text: text.into(),
             kind,
             born: std::time::Instant::now(),
         });
+        if self.toasts.len() > 3 {
+            let overflow = self.toasts.len() - 3;
+            self.toasts.drain(..overflow); // los más viejos fuera
+        }
     }
 
-    /// Dibuja las notificaciones flotantes, arriba a la derecha.
+    /// Dibuja las notificaciones flotantes, apiladas arriba a la derecha.
     pub fn show_toasts(&mut self, ctx: &egui::Context) {
         self.toasts.retain(|toast| toast.born.elapsed().as_secs_f32() < 4.0);
-        let Some(latest) = self.toasts.last().cloned() else {
+        if self.toasts.is_empty() {
             return;
-        };
-        let (color, icon) = match latest.kind {
-            ToastKind::Ok => (theme::accent(), "✔"),
-            ToastKind::Error => (theme::DANGER, "⚠"),
-        };
-        egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                // Fade de entrada/salida durante los primeros/últimos 0,4 s.
-                let age = latest.born.elapsed().as_secs_f32();
-                let alpha = (age / 0.4).min(1.0) * ((4.0 - age) / 0.4).min(1.0);
-                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
-                egui::Frame::new()
-                    .fill(theme::CARD_ELEVATED.gamma_multiply(alpha.clamp(0.05, 1.0)))
-                    .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(alpha.clamp(0.05, 1.0))))
-                    .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.set_min_width(260.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(icon).color(color).size(15.0));
-                            ui.label(egui::RichText::new(&latest.text).color(theme::TEXT));
+        }
+        let toasts = self.toasts.clone();
+        // Cada toast en su propio Area anclado, desplazado hacia abajo por índice.
+        for (index, toast) in toasts.iter().enumerate() {
+            let (color, icon) = match toast.kind {
+                ToastKind::Ok => (theme::accent(), "✔"),
+                ToastKind::Error => (theme::DANGER, "⚠"),
+            };
+            // Alpha de entrada/salida (primeros/últimos 0,4 s de vida).
+            let age = toast.born.elapsed().as_secs_f32();
+            let alpha = ((age / 0.4).min(1.0) * ((4.0 - age) / 0.4).min(1.0)).clamp(0.05, 1.0);
+            egui::Area::new(egui::Id::new("toast").with(index))
+                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0 + 12.0 * index as f32])
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                    egui::Frame::new()
+                        .fill(theme::CARD_ELEVATED.gamma_multiply(alpha))
+                        .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(alpha)))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::symmetric(12, 7))
+                        .show(ui, |ui| {
+                            ui.set_min_width(240.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(icon).color(color).size(14.0));
+                                ui.label(egui::RichText::new(&toast.text).color(theme::TEXT));
+                            });
                         });
-                    });
-            });
+                });
+        }
     }
 }
 
@@ -1339,7 +1347,7 @@ impl McLiteApp {
     // ── Pintado ──────────────────────────────────────────────────────────────
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
-        // Todo se copia antes del closure para no atascar préstamos.
+        // Copias para no pelear con los préstamos dentro del closure.
         let job = self
             .job
             .as_ref()
@@ -1354,18 +1362,19 @@ impl McLiteApp {
             .show(ui, |ui| {
                 if let Some((label, phase, done, total)) = job {
                     if total > 0 {
-                        let fraction = (done as f32 / total as f32).clamp(0.0, 1.0);
-                        // Velocidad + ETA (usa el Job con su instante de arranque).
-                        let suffix = self
+                        // Misma barra de progreso propia que en Home, versión mini.
+                        let eta = self
                             .job
                             .as_ref()
                             .and_then(|job| job.speed_and_eta())
-                            .map(|(speed, eta)| format!(" · {:.0}/s · queda {eta}", speed))
-                            .unwrap_or_default();
-                        ui.add(
-                            egui::ProgressBar::new(fraction)
-                                .show_percentage()
-                                .text(format!("{label} · {phase}: {done}/{total}{suffix}")),
+                            .map(|(speed, eta)| format!("{:.0}/s · queda {eta}", speed));
+                        crate::ui::widgets::progress(
+                            ui,
+                            &label,
+                            &phase,
+                            done,
+                            total,
+                            eta,
                         );
                     } else {
                         ui.horizontal(|ui| {
@@ -1373,20 +1382,27 @@ impl McLiteApp {
                             ui.label(format!("{label} · {phase}…"));
                         });
                     }
-                } else if let Some(error) = error {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("error: {error}")).color(theme::DANGER));
-                        if ui.small_button("×").clicked() {
-                            clear_error = true;
-                        }
-                    });
                 } else {
+                    // Punto de estado: verde OK / rojo error, con el texto al lado.
                     ui.horizontal(|ui| {
-                        ui.label(theme::muted(&status));
+                        let (color, text) = match &error {
+                            Some(err) => (theme::DANGER, format!("Error: {err}")),
+                            None => (theme::accent_soft(), status.clone()),
+                        };
+                        let (dot, _) = ui.allocate_exact_size(
+                            egui::vec2(10.0, 10.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().circle_filled(dot.center(), 4.0, color);
+                        ui.label(theme::muted(text));
+
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
                                 ui.label(theme::muted(format!("McLite {LAUNCHER_VERSION}")));
+                                if error.is_some() && ui.small_button("×").clicked() {
+                                    clear_error = true;
+                                }
                             },
                         );
                     });
