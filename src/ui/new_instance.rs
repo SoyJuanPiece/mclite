@@ -372,7 +372,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             let create = egui::Button::new(egui::RichText::new("Crear instancia")
                 .size(17.0)
                 .strong())
-            .fill(theme::ACCENT)
+            .fill(theme::accent())
             .min_size(egui::vec2(width, 44.0));
             if ui.add_enabled(can_create, create).clicked() {
                 action = Some(Action::Create);

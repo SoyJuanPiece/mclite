@@ -191,20 +191,93 @@ pub struct McLiteApp {
     pub editing_slug: Option<String>,
     /// Detalle del pack abierto (pestaña Modpacks).
     pub pack_detail: Option<modrinth::PackDetail>,
+    /// Icono del pack que se está instalando (para la instancia que nacerá).
+    pending_pack_icon: Option<String>,
     /// Filtro del buscador de la lista lateral.
     pub sidebar_search: String,
+    /// Notificaciones flotantes (éxito/error) con auto-cierre.
+    pub toasts: Vec<Toast>,
+    /// Transición entre pantallas (0.0 = entra, 1.0 = asentada).
+    pub screen_fade: f32,
+    /// Pantalla desde la que se viene, para animar la entrada.
+    screen_from: Option<Screen>,
     tx: Sender<Message>,
     rx: Receiver<Message>,
 }
 
+/// Notificación flotante con auto-cierre.
+#[derive(Clone)]
+pub struct Toast {
+    pub text: String,
+    pub kind: ToastKind,
+    pub born: std::time::Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ToastKind {
+    Ok,
+    Error,
+}
+
+impl McLiteApp {
+    /// Muestra una notificación flotante (dura ~4 s).
+    pub fn notify(&mut self, text: impl Into<String>, kind: ToastKind) {
+        self.toasts.push(Toast {
+            text: text.into(),
+            kind,
+            born: std::time::Instant::now(),
+        });
+    }
+
+    /// Dibuja las notificaciones flotantes, arriba a la derecha.
+    pub fn show_toasts(&mut self, ctx: &egui::Context) {
+        self.toasts.retain(|toast| toast.born.elapsed().as_secs_f32() < 4.0);
+        let Some(latest) = self.toasts.last().cloned() else {
+            return;
+        };
+        let (color, icon) = match latest.kind {
+            ToastKind::Ok => (theme::accent(), "✔"),
+            ToastKind::Error => (theme::DANGER, "⚠"),
+        };
+        egui::Area::new(egui::Id::new("toasts"))
+            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                // Fade de entrada/salida durante los primeros/últimos 0,4 s.
+                let age = latest.born.elapsed().as_secs_f32();
+                let alpha = (age / 0.4).min(1.0) * ((4.0 - age) / 0.4).min(1.0);
+                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                egui::Frame::new()
+                    .fill(theme::CARD_ELEVATED.gamma_multiply(alpha.clamp(0.05, 1.0)))
+                    .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(alpha.clamp(0.05, 1.0))))
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(260.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(icon).color(color).size(15.0));
+                            ui.label(egui::RichText::new(&latest.text).color(theme::TEXT));
+                        });
+                    });
+            });
+    }
+}
+
 impl McLiteApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // El acento se fija antes de aplicar el tema para que todo nazca del color elegido.
+        let paths_probe = Paths::discover()
+            .unwrap_or_else(|_| Paths::with_root(std::env::temp_dir().join("mclite")));
+        let config_probe = LauncherConfig::load(&paths_probe);
+        theme::set_accent(theme::Accent::from_key(
+            config_probe.accent.as_deref().unwrap_or("green"),
+        ));
+
         theme::apply(&cc.egui_ctx);
         // Iconos de Modrinth en la pestaña Modpacks: carga por URL en segundo plano.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let paths = Paths::discover()
-            .unwrap_or_else(|_| Paths::with_root(std::env::temp_dir().join("mclite")));
+        let paths = paths_probe;
         logging::init(&paths);
         logging::info("arranque del launcher");
         logging::info(&format!("carpeta de datos: {}", paths.root().display()));
@@ -251,7 +324,11 @@ impl McLiteApp {
             pack_versions: Vec::new(),
             editing_slug: None,
             pack_detail: None,
+            pending_pack_icon: None,
             sidebar_search: String::new(),
+            toasts: Vec::new(),
+            screen_fade: 1.0,
+            screen_from: None,
             tx,
             rx,
         };
@@ -398,16 +475,28 @@ impl McLiteApp {
             }
             Message::JobDone(status) => {
                 self.job = None;
-                self.status = status;
+                self.status = status.clone();
+                self.notify(status, ToastKind::Ok);
             }
             Message::PackInstalled(slug) => {
                 self.job = None;
                 // La instancia se creó en el hilo de instalación: recargar el
                 // índice para que aparezca YA en la lista, sin reiniciar.
                 self.store = InstanceStore::load(&self.paths);
+                // El icono del pack, si lo hay, queda como cara de la instancia.
+                if let Some(instance) = self
+                    .store
+                    .instances
+                    .iter_mut()
+                    .find(|instance| instance.slug == slug)
+                {
+                    instance.icon = self.pending_pack_icon.take().or(instance.icon.clone());
+                    let _ = self.store.save(&self.paths);
+                }
                 self.selected = Some(slug);
                 self.screen = Screen::Home;
                 self.status = "Modpack instalado: listo para JUGAR".to_string();
+                self.notify("Modpack instalado", ToastKind::Ok);
             }
             Message::GameExit(result) => {
                 self.job = None;
@@ -426,7 +515,8 @@ impl McLiteApp {
             }
             Message::Failed(message) => {
                 self.job = None;
-                self.error = Some(message);
+                self.error = Some(message.clone());
+                self.notify(format!("Error: {message}"), ToastKind::Error);
             }
             Message::Played { slug } => {
                 if let Some(instance) = self
@@ -793,6 +883,8 @@ impl McLiteApp {
         let tx = self.tx.clone();
         let paths = self.paths.clone();
         let config = self.config.clone();
+        // Para vestir la instancia nueva con el icono del pack al terminar.
+        self.pending_pack_icon = hit.icon_url.clone();
 
         self.job = Some(Job {
             label: format!("Pack {name}"),
@@ -1256,6 +1348,17 @@ impl eframe::App for McLiteApp {
             }
         }
 
+        // Transición de pantalla: se anima la entrada (caída leve que se asienta).
+        let previous = self.screen_from.unwrap_or(self.screen);
+        if self.screen != previous {
+            self.screen_fade = 0.0;
+        }
+        self.screen_from = Some(self.screen);
+        if self.screen_fade < 1.0 {
+            let delta = ctx.input(|input| input.stable_dt).min(0.06);
+            self.screen_fade = (self.screen_fade + delta / 0.18).min(1.0);
+        }
+
         // Barra de estado degradada, esquinas superiores redondeadas.
         egui::TopBottomPanel::bottom("status_bar")
             .frame(
@@ -1275,13 +1378,26 @@ impl eframe::App for McLiteApp {
             .show(ctx, |ui| instances::show(self, ui));
 
         let screen = self.screen;
-        egui::CentralPanel::default().show(ctx, |ui| match screen {
-            Screen::Home => home::show(self, ui),
-            Screen::New => new_instance::show(self, ui),
-            Screen::Edit => edit_instance::show(self, ui),
-            Screen::Modpacks => modpacks::show(self, ui),
-            Screen::Settings => settings::show(self, ui),
+        let fade = self.screen_fade;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Entrada de pantalla: pequeño desplazamiento vertical que se asienta.
+            let offset = (1.0 - fade) * 10.0;
+            egui::Frame::new()
+                .outer_margin(egui::Margin { top: (offset as i8), ..Default::default() })
+                .show(ui, |ui| match screen {
+                    Screen::Home => home::show(self, ui),
+                    Screen::New => new_instance::show(self, ui),
+                    Screen::Edit => edit_instance::show(self, ui),
+                    Screen::Modpacks => modpacks::show(self, ui),
+                    Screen::Settings => settings::show(self, ui),
+                });
+            // Repintar hasta terminar la transición.
+            if fade < 1.0 {
+                ctx.request_repaint();
+            }
         });
+
+        self.show_toasts(ctx);
 
         // Los mensajes de los hilos necesitan repintados periódicos.
         ctx.request_repaint_after(Duration::from_millis(120));

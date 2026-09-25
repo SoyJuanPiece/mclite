@@ -41,6 +41,10 @@ pub struct Instance {
     pub last_played: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Icono de la instancia: URL (p. ej. icono del pack en Modrinth) o vacío
+    /// para usar el avatar derivado del nombre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 fn default_ram() -> u32 {
@@ -71,6 +75,7 @@ impl Instance {
             created: None,
             last_played: None,
             notes: None,
+            icon: None,
         }
     }
 

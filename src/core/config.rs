@@ -47,6 +47,10 @@ pub struct LauncherConfig {
     /// Último tamaño/posición de la ventana, para restaurar la sesión.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowSize>,
+    /// Color de acento de la interfaz: clave del preset ("green", "blue",
+    /// "violet", "rose", "amber"). `None` = verde por defecto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
 }
 
 /// Tamaño de ventana guardado entre sesiones.
@@ -89,6 +93,7 @@ impl Default for LauncherConfig {
             threads: http::DEFAULT_THREADS,
             last_instance: None,
             window: None,
+            accent: None,
         }
     }
 }
@@ -268,5 +273,18 @@ mod tests {
         paths.ensure().unwrap();
         LauncherConfig::default().save(&paths).unwrap();
         assert!(migrate_previous(&paths).is_none());
+    }
+
+    #[test]
+    fn el_acento_se_guarda_y_relee() {
+        let paths = temp_root("accento");
+        let mut config = LauncherConfig::default();
+        config.accent = Some("violet".into());
+        config.save(&paths).unwrap();
+        assert_eq!(LauncherConfig::load(&paths).accent.as_deref(), Some("violet"));
+        // Una config vieja sin el campo sigue cargando (default None).
+        let paths2 = temp_root("accento-viejo");
+        LauncherConfig::default().save(&paths2).unwrap();
+        assert_eq!(LauncherConfig::load(&paths2).accent, None);
     }
 }

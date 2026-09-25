@@ -3,7 +3,7 @@
 //! Las filas se pintan a mano (painter) para tener avatar, dos líneas de texto
 //! y barra de acento en la seleccionada, algo que los widgets estándar no dan.
 
-use egui::{Align2, Color32, CornerRadius, FontId, RichText, Sense, Ui, Vec2};
+use egui::{Color32, CornerRadius, RichText, Sense, Ui, Vec2};
 
 use crate::LAUNCHER_VERSION;
 
@@ -11,27 +11,29 @@ use crate::app::{McLiteApp, Screen};
 use crate::loaders::LoaderKind;
 use crate::ui::{theme, widgets};
 
-/// Fila del lateral, pintada a mano. Devuelve la respuesta para detectar el
-/// clic. `sub` añade una segunda línea; `dot` un círculo de color delante.
+/// Fila del lateral. Se pinta el fondo a mano y el contenido con un ui hijo
+/// anclado al rect (permite mezclar imagen de icono y textos). `dot` añade un
+/// círculo de color; `icon` una miniatura (URL, p. ej. pack de Modrinth).
 fn side_item(
     ui: &mut Ui,
     selected: bool,
     title: &str,
     sub: Option<&str>,
     dot: Option<Color32>,
+    icon: Option<&str>,
     title_color: Color32,
 ) -> egui::Response {
-    let height = if sub.is_some() { 42.0 } else { 32.0 };
+    let height = if sub.is_some() { 44.0 } else { 32.0 };
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
-    // Fondo: seleccionado = tinte de acento; hover = tarjeta elevada; resto = card.
-    let (fill, text_color) = if selected {
-        (theme::ACCENT.gamma_multiply(0.20), theme::TEXT)
+    // Fondo: seleccionado = tinte de acento; hover = tarjeta elevada; resto = transparente.
+    let fill = if selected {
+        theme::accent().gamma_multiply(0.20)
     } else if response.hovered() {
-        (theme::CARD_ELEVATED, theme::TEXT)
+        theme::CARD_ELEVATED
     } else {
-        (Color32::TRANSPARENT, title_color)
+        Color32::TRANSPARENT
     };
     if fill != Color32::TRANSPARENT {
         ui.painter()
@@ -43,43 +45,39 @@ fn side_item(
             [rect.left(), rect.top() + 6.0].into(),
             [rect.left() + 3.0, rect.bottom() - 6.0].into(),
         );
-        ui.painter().rect_filled(bar, CornerRadius::same(2), theme::ACCENT_SOFT);
+        ui.painter()
+            .rect_filled(bar, CornerRadius::same(2), theme::accent_soft());
     }
 
-    let mut text_left = rect.left() + 12.0;
-    if let Some(color) = dot {
-        let center = [rect.left() + 16.0, rect.center().y].into();
-        ui.painter().circle_filled(center, 4.5, color);
-        text_left = rect.left() + 28.0;
-    }
-
-    match sub {
-        None => {
-            ui.painter().text(
-                [text_left, rect.center().y].into(),
-                Align2::LEFT_CENTER,
-                title,
-                FontId::proportional(14.5),
-                text_color,
+    // Contenido, sobre el rect reservado.
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    row.horizontal_centered(|ui| {
+        ui.add_space(12.0);
+        if let Some(url) = icon {
+            ui.add(
+                egui::Image::from_uri(url)
+                    .max_size(Vec2::new(26.0, 26.0))
+                    .corner_radius(CornerRadius::same(6)),
             );
+            ui.add_space(8.0);
+        } else if let Some(color) = dot {
+            let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
+            ui.painter()
+                .circle_filled(dot_rect.center(), 4.5, color);
+            ui.add_space(6.0);
         }
-        Some(sub) => {
-            ui.painter().text(
-                [text_left, rect.top() + 11.0].into(),
-                Align2::LEFT_TOP,
-                title,
-                FontId::proportional(14.0),
-                text_color,
-            );
-            ui.painter().text(
-                [text_left, rect.bottom() - 9.0].into(),
-                Align2::LEFT_BOTTOM,
-                sub,
-                FontId::proportional(11.5),
-                theme::MUTED,
-            );
+        match sub {
+            None => {
+                ui.label(RichText::new(title).size(14.5).color(title_color));
+            }
+            Some(sub) => {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).size(14.0).color(title_color));
+                    ui.label(RichText::new(sub).size(11.5).color(theme::MUTED));
+                });
+            }
         }
-    }
+    });
 
     response
 }
@@ -87,7 +85,7 @@ fn side_item(
 pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     // Filas filtradas por el buscador (nombre o versión de MC).
     let filter = app.sidebar_search.trim().to_lowercase();
-    let rows: Vec<(String, String, String, LoaderKind)> = app
+    let rows: Vec<(String, String, String, LoaderKind, Option<String>)> = app
         .store
         .instances
         .iter()
@@ -102,6 +100,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 instance.name.clone(),
                 format!("{} · {}", instance.mc_version, instance.loader.label()),
                 instance.loader,
+                instance.icon.clone(),
             )
         })
         .collect();
@@ -120,25 +119,11 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // ── Marca ────────────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                egui::Frame::new()
-                    .fill(theme::ACCENT)
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(egui::Margin::same(4))
-                    .show(ui, |ui| {
-                        ui.set_min_size(Vec2::new(24.0, 24.0));
-                        ui.centered_and_justified(|ui| {
-                            ui.label(
-                                RichText::new("M")
-                                    .strong()
-                                    .size(16.0)
-                                    .color(Color32::WHITE),
-                            );
-                        });
-                    });
+                theme::grass_block(ui, 26.0);
                 ui.label(
                     RichText::new("McLite")
                         .size(19.0)
-                        .strong()
+                        .family(theme::semibold())
                         .color(theme::TEXT),
                 );
                 ui.label(theme::muted(format!("v{LAUNCHER_VERSION}")));
@@ -169,7 +154,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(10.0);
 
             // ── Navegación ──────────────────────────────────────────────────
-            if side_item(ui, screen == Screen::Home, "▶  Jugar", None, None, theme::TEXT)
+            if side_item(ui, screen == Screen::Home, "▶  Jugar", None, None, None, theme::TEXT)
                 .clicked()
             {
                 go_home = true;
@@ -178,6 +163,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 ui,
                 screen == Screen::Modpacks,
                 "◈  Modpacks",
+                None,
                 None,
                 None,
                 theme::TEXT,
@@ -192,6 +178,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 "⚙  Ajustes",
                 None,
                 None,
+                None,
                 theme::TEXT,
             )
             .clicked()
@@ -200,8 +187,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             }
             // Acción destacada, no navegación.
             let create = egui::Button::new(RichText::new("＋  Nueva instancia").strong())
-                .fill(theme::ACCENT.gamma_multiply(0.25))
-                .stroke(egui::Stroke::new(1.0_f32, theme::ACCENT))
+                .fill(theme::accent().gamma_multiply(0.25))
+                .stroke(egui::Stroke::new(1.0_f32, theme::accent()))
                 .corner_radius(CornerRadius::same(8))
                 .min_size(Vec2::new(ui.available_width(), 30.0));
             if ui.add(create).clicked() {
@@ -234,13 +221,14 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                             "Ninguna coincide con la búsqueda."
                         }));
                     }
-                    for (slug, name, sub, loader) in &rows {
+                    for (slug, name, sub, loader, icon) in &rows {
                         let response = side_item(
                             ui,
                             app.selected.as_deref() == Some(slug.as_str()),
                             name,
                             Some(sub),
                             Some(widgets::loader_color(*loader)),
+                            icon.as_deref(),
                             theme::TEXT,
                         );
                         if response.clicked() {

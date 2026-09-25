@@ -30,7 +30,9 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
 
 fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
     ui.vertical_centered(|ui| {
-        ui.add_space(70.0);
+        ui.add_space(40.0);
+        theme::grass_block(ui, 84.0);
+        ui.add_space(8.0);
         ui.label(theme::title("McLite"));
         ui.add_space(4.0);
         ui.label(theme::muted("Launcher lite de Minecraft · cuentas offline"));
@@ -42,7 +44,7 @@ fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
 }
 
 /// Banner de la instancia: avatar grande, nombre, badges y datos.
-fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str) {
+fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str, icon: Option<&str>) {
     egui::Frame::new()
         .fill(Color32::from_rgb(0x1B, 0x2B, 0x1B))
         .stroke(Stroke::new(1.0_f32, theme::BORDER))
@@ -51,7 +53,16 @@ fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str) {
         .show(ui, |ui| {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                theme::avatar(ui, nick, 46.0);
+                if let Some(url) = icon {
+                    // Instancia con icono (pack de Modrinth): miniatura del pack.
+                    ui.add(
+                        egui::Image::from_uri(url)
+                            .max_size(egui::vec2(46.0, 46.0))
+                            .corner_radius(CornerRadius::same(10)),
+                    );
+                } else {
+                    theme::avatar(ui, nick, 46.0);
+                }
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(name).size(22.0).strong());
@@ -68,7 +79,7 @@ fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(2), theme::ACCENT);
+        .rect_filled(rect, CornerRadius::same(2), theme::accent());
 }
 
 fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
@@ -108,12 +119,13 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             instance.height
         ),
         &instance.game_dir(&app.paths).display().to_string(),
+        instance.icon.as_deref(),
     );
 
     // Badges sobre el banner.
     ui.horizontal(|ui| {
         widgets::badge(ui, instance.loader.label(), widgets::loader_color(instance.loader));
-        widgets::badge(ui, &instance.mc_version, theme::ACCENT);
+        widgets::badge(ui, &instance.mc_version, theme::accent());
         if let Some(loader_version) = &instance.loader_version {
             widgets::badge(ui, loader_version, theme::CARD_ELEVATED);
         }
@@ -124,9 +136,9 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     ui.horizontal(|ui| {
         let width = ui.available_width() - 130.0;
         let play = egui::Button::new(RichText::new("▶  JUGAR").size(22.0).strong())
-            .fill(theme::ACCENT)
-            .corner_radius(CornerRadius::same(8))
-            .min_size(egui::vec2(width, 58.0));
+        .fill(theme::accent())
+        .corner_radius(CornerRadius::same(10))
+        .min_size(egui::vec2(width, 58.0));
         if ui.add_enabled(!busy, play).clicked() {
             action = Some(Action::Play);
         }

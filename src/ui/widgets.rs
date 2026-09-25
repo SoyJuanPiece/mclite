@@ -1,6 +1,6 @@
 //! Widgets reutilizables: badges, control segmentado y progreso.
 
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, CornerRadius, FontId, RichText, Stroke, Ui};
 use crate::loaders::LoaderKind;
 
 use crate::ui::theme;
@@ -67,21 +67,55 @@ pub fn segmented<T: PartialEq + Copy>(
     chosen
 }
 
-/// Barra de progreso con fase textual; con `total == 0` muestra spinner.
-/// Con `eta` (velocidad + tiempo restante), lo añade al texto.
+/// Barra de progreso propia: pista oscura redondeada, relleno de acento con
+/// punta brillante y texto encima (fase, contador y ETA). Con `total == 0`
+/// muestra spinner y fase.
 pub fn progress(ui: &mut Ui, label: &str, phase: &str, done: u64, total: u64, eta: Option<String>) {
-    if total > 0 {
-        let fraction = (done as f32 / total as f32).clamp(0.0, 1.0);
-        let suffix = eta.map(|eta| format!(" · {eta}")).unwrap_or_default();
-        ui.add(
-            egui::ProgressBar::new(fraction)
-                .show_percentage()
-                .text(format!("{label} · {phase}: {done}/{total}{suffix}")),
-        );
-    } else {
+    if total == 0 {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(format!("{label} · {phase}…"));
         });
+        return;
     }
+
+    let fraction = (done as f32 / total as f32).clamp(0.0, 1.0);
+    let height = 22.0;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter();
+    let radius = CornerRadius::same(height as u8 / 2);
+
+    // Pista.
+    painter.rect_filled(rect, radius, theme::INPUT);
+    painter.rect_stroke(rect, radius, Stroke::new(1.0_f32, theme::BORDER), egui::StrokeKind::Inside);
+
+    // Relleno.
+    if fraction > 0.0 {
+        let fill_rect = egui::Rect::from_min_max(
+            rect.left_top(),
+            [rect.left() + (rect.width() * fraction).max(height), rect.bottom()].into(),
+        );
+        painter.rect_filled(fill_rect, radius, theme::accent());
+        // Punta más clara (efecto de avance).
+        let tip_w = 8.0_f32.min(fill_rect.width() * 0.3);
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                [fill_rect.right() - tip_w, fill_rect.top()].into(),
+                fill_rect.right_bottom(),
+            ),
+            radius,
+            theme::accent_soft(),
+        );
+    }
+
+    // Texto centrado: fase · done/total · eta.
+    let suffix = eta.map(|eta| format!(" · {eta}")).unwrap_or_default();
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        format!("{label} · {phase}: {done}/{total}{suffix}"),
+        FontId::proportional(12.5),
+        theme::TEXT,
+    );
 }

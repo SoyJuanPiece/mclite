@@ -28,6 +28,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let mut config_dirty = false;
     let mut detect = false;
     let mut open: Option<PathBuf> = None;
+    let mut accent_change: Option<crate::ui::theme::Accent> = None;
+    let ctx = ui.ctx().clone();
 
     egui::ScrollArea::vertical()
         .id_salt("settings")
@@ -36,6 +38,35 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(8.0);
             ui.label(theme::title("Ajustes"));
             ui.add_space(10.0);
+
+            // ── Apariencia ───────────────────────────────────────────────────
+            card(ui, "APARIENCIA", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Color de acento:");
+                    for accent in crate::ui::theme::ACCENTS {
+                        let chosen = app.config.accent.as_deref()
+                            == Some(accent.key())
+                            || (app.config.accent.is_none() && accent == crate::ui::theme::Accent::Green);
+                        // Pastilla de color; la elegida lleva anillo.
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(26.0, 26.0),
+                            egui::Sense::click(),
+                        );
+                        ui.painter().circle_filled(rect.center(), 11.0, accent.color());
+                        if chosen {
+                            ui.painter().circle_stroke(
+                                rect.center(),
+                                13.0,
+                                egui::Stroke::new(2.0_f32, theme::TEXT),
+                            );
+                        }
+                        if response.clicked() {
+                            accent_change = Some(accent);
+                        }
+                        response.on_hover_text(accent.name());
+                    }
+                });
+            });
 
             // ── Cuenta ───────────────────────────────────────────────────────
             card(ui, "CUENTA OFFLINE", |ui| {
@@ -205,6 +236,14 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(16.0);
         });
 
+    if let Some(accent) = accent_change {
+        app.config.accent = Some(accent.key().to_string());
+        crate::ui::theme::set_accent(accent);
+        crate::ui::theme::reapply_accent(&ctx);
+        if app.config.save(&app.paths).is_ok() {
+            app.notify(format!("Color de acento: {}", accent.name()), crate::app::ToastKind::Ok);
+        }
+    }
     if config_dirty && app.config.save(&app.paths).is_ok() {
         app.status = "Ajustes guardados".to_string();
     }

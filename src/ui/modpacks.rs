@@ -239,7 +239,7 @@ fn pack_header(
                     }
                     ui.horizontal(|ui| {
                         for category in detail.categories.iter().take(5) {
-                            widgets::badge(ui, category, theme::ACCENT);
+                            widgets::badge(ui, category, theme::accent());
                         }
                     });
                     if let Some(published) = &detail.published {
@@ -266,7 +266,7 @@ fn pack_header(
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(number).strong());
                     if !game.is_empty() {
-                        widgets::badge(ui, game, theme::ACCENT);
+                        widgets::badge(ui, game, theme::accent());
                     }
                     if ui.button("Instalar").clicked() {
                         *action = Some(Action::Install {
