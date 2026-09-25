@@ -1,0 +1,59 @@
+McLite — Launcher ligero de Minecraft para Windows
+Copyright (c) 2026 Juan Vivenes. Todos los derechos reservados.
+
+LICENCIA PROPIETARIA DE USO RESTRINGIDO
+=======================================
+
+1. DEFINICIONES
+   - "EL SOFTWARE": el programa McLite, sus binarios (incluido mclite.exe),
+     su código fuente, sus recursos y esta licencia.
+   - "EL AUTOR": Juan Vivenes, titular de todos los derechos sobre EL SOFTWARE.
+   - "USTED": quien obtiene una copia de EL SOFTWARE.
+
+2. LICENCIA DE USO
+   Se concede a USTED una licencia personal, no exclusiva, no transferible y
+   gratuita para:
+   a) descargar, instalar y ejecutar EL SOFTWARE en sus propios equipos;
+   b) compartir el enlace oficial de descarga (repositorio o releases) con
+      otras personas.
+
+3. PROHIBICIONES
+   Queda EXPRESAMENTE PROHIBIDO, sin autorización previa por escrito del
+   AUTOR:
+   a) REDISTRIBUIR EL SOFTWARE: revender, sublicenciar, regalar, publicar,
+      reempaquetar o distribuir copias del binario o del código fuente, por
+      cualquier medio (sitios web, foros, Discord, stores, CDs, USB, etc.),
+      salvo el enlace de descarga oficial del AUTOR;
+   b) incluir EL SOFTWARE —total o parcialmente— dentro de otros paquetes,
+      instaladores, colecciones, "launchers de launchers" u obras derivadas
+      que se distribuyan a terceros;
+   c) modificar EL SOFTWARE y distribuir la versión modificada;
+   d) extraer o reutilizar el código fuente —total o parcialmente— para
+      crear obras derivadas, competitivas o no;
+   e) eliminar o alterar los avisos de copyright, licencia o atribución.
+
+4. MINECRAFT Y MOJANG
+   EL SOFTWARE no incluye ni redistribuye contenido de Minecraft. Todo el
+   material del juego se descarga desde los servidores oficiales de Mojang
+   o Microsoft. McLite no está afiliado a Mojang, Microsoft ni a la marca
+   Minecraft. Las cuentas de juego se gestionan de forma local (offline);
+   USTED es responsable de cumplir el EULA de Minecraft aplicable a su uso.
+
+5. SIN GARANTÍA Y LIMITACIÓN DE RESPONSABILIDAD
+   EL SOFTWARE SE ENTREGA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO, EXPRESA
+   O IMPLÍCITA (INCLUIDAS COMERCIABILIDAD, ADECUACIÓN PARA UN FIN DETERMINADO
+   Y NO INFRACCIÓN). EN NINGÚN CASO EL AUTOR SERÁ RESPONSABLE POR DAÑOS,
+   PÉRDIDAS DE DATOS, MUNDOS, ARCHIVOS O CUALQUIER PERJUICIO DERIVADO DEL USO
+   DE EL SOFTWARE.
+
+6. TERMINACIÓN
+   El incumplimiento de esta licencia la termina automáticamente. En tal
+   caso, USTED debe dejar de usar y borrar todas las copias de EL SOFTWARE.
+
+7. LEY APLICABLE
+   Esta licencia se rige por la legislación española. Cualquier disputa se
+   somete a los juzgados y tribunales del domicilio del AUTOR.
+
+---
+Para permisos especiales (redistribución, redistribución de forks, empaquetado
+en tiendas de software, etc.), contacta con el AUTOR.
