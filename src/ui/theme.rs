@@ -4,7 +4,7 @@
 //! Ajustes al vuelo. La tipografía es Inter (regular + semibold, OFL), y el
 //! logo es un bloque de hierba pintado a mano con el painter.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use egui::{
     Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, RichText,
@@ -431,6 +431,12 @@ pub fn card_section(ui: &mut egui::Ui, title_text: &str, body: impl FnOnce(&mut 
 
 /// Sección plegable tipo acordeón: la cabecera (siempre visible) abre o cierra
 /// el contenido con un clic. Devuelve el estado nuevo (true = abierta).
+/// Antirrebote del acordeón: la última cabecera pulsada (puntero del texto
+/// estático) y el instante (ms). Dos clics del MISMO botón en <200 ms cuentan
+/// como uno: algunos ratones/touchpads de Windows emiten doble evento.
+static LAST_TOGGLE_KEY: AtomicU64 = AtomicU64::new(0);
+static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
+
 pub fn section_toggle(
     ui: &mut egui::Ui,
     open: bool,
@@ -488,7 +494,19 @@ pub fn section_toggle(
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.clicked() {
-        new_open = !open;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let key = title_text.as_ptr() as u64; // los títulos son literales 'static
+        let same_key = LAST_TOGGLE_KEY.load(Ordering::Relaxed) == key;
+        let last_ms = LAST_TOGGLE_MS.load(Ordering::Relaxed);
+        // Clic aceptado: otra sección, o la misma después del rebote.
+        if !same_key || now_ms.saturating_sub(last_ms) > 200 {
+            LAST_TOGGLE_KEY.store(key, Ordering::Relaxed);
+            LAST_TOGGLE_MS.store(now_ms, Ordering::Relaxed);
+            new_open = !open;
+        }
     }
     ui.add_space(4.0);
     if new_open {
