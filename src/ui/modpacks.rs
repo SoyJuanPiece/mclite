@@ -109,56 +109,93 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(8.0);
 
             if packs.is_empty() && !loading {
-                ui.label(theme::muted(
-                    "Busca un modpack por nombre, o pulsa Buscar para ver los populares.",
-                ));
+                ui.add_space(20.0);
+                ui.vertical_centered(|ui| {
+                    theme::grass_block(ui, 64.0);
+                    ui.add_space(8.0);
+                    ui.label(theme::muted(
+                        "Busca un modpack por nombre, o pulsa Buscar para ver los populares.",
+                    ));
+                });
+                ui.add_space(8.0);
             }
+            // Rejilla de tarjetas: columnas según el ancho disponible.
+            let columns = ((ui.available_width() / 250.0) as usize).clamp(1, 4);
+            let mut placed_in_row = 0usize;
+            egui::Grid::new("packs-grid")
+                .min_col_width(240.0)
+                .spacing([12.0, 12.0])
+                .show(ui, |ui| {
             for (slug, title, description, downloads, mc_versions, icon) in &packs {
-                theme::card(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            // Icono del pack (72×72). Mientras carga, cuadro vacío.
-                            match icon.as_deref().filter(|url| !url.is_empty()) {
-                                Some(url) => {
-                                    ui.add(
-                                        egui::Image::from_uri(url)
-                                            .fit_to_exact_size(egui::vec2(72.0, 72.0))
-                                            .corner_radius(6.0),
-                                    );
-                                }
-                                None => {
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(72.0, 72.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter()
-                                        .rect_filled(rect, 6.0, theme::SIDEBAR);
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
+                    // Tarjeta fija: hover con borde de acento, todo clic.
+                    let response = egui::Frame::new()
+                        .fill(theme::CARD)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.set_min_width(230.0);
+                            ui.set_max_width(230.0);
+                            ui.vertical(|ui| {
+                                // Icono del pack (100×100). Mientras carga, cuadro vacío.
+                                match icon.as_deref().filter(|url| !url.is_empty()) {
+                                    Some(url) => {
+                                        ui.add(
+                                            egui::Image::from_uri(url)
+                                                .fit_to_exact_size(egui::vec2(100.0, 100.0))
+                                                .corner_radius(8.0),
+                                        );
+                                    }
+                                    None => {
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(100.0, 100.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter()
+                                            .rect_filled(rect, 8.0, theme::SIDEBAR);
+                                        ui.painter().text(
+                                            rect.center(),
+                                            egui::Align2::CENTER_CENTER,
                                         "📦",
                                         egui::TextStyle::Heading.resolve(ui.style()),
                                         theme::MUTED,
                                     );
+                                    }
                                 }
-                            }
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(title).strong().size(15.0));
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(collapse_short(title, 32))
+                                        .strong()
+                                        .size(14.5)
+                                        .family(theme::semibold()),
+                                );
                                 ui.label(theme::muted(format!(
-                                    "{downloads} descargas · MC {}",
+                                    "{} descargas · MC {}",
+                                    widgets::format_count(*downloads),
                                     mc_versions.first().cloned().unwrap_or_default()
                                 )));
                                 if !description.is_empty() {
-                                    ui.label(theme::muted(collapse(description)));
-                                }
-                                if ui.button("Ver detalle e instalar").clicked() {
-                                    action = Some(Action::Open(slug.clone()));
+                                    ui.label(theme::muted(collapse_short(description, 70)));
                                 }
                             });
-                        });
-                    });
-                ui.add_space(4.0);
+                        })
+                        .response
+                        .interact(egui::Sense::click());
+                    if response.clicked() {
+                        action = Some(Action::Open(slug.clone()));
+                    }
+                    if response.hovered() {
+                        ui.ctx().request_repaint();
+                    }
+                    response.on_hover_text("Ver detalle e instalar");
+
+                    // Fin de fila de la rejilla.
+                    placed_in_row += 1;
+                    if placed_in_row % columns == 0 {
+                        ui.end_row();
+                    }
             }
+            });
             ui.add_space(16.0);
         });
 
@@ -277,6 +314,17 @@ fn pack_header(
                 });
             }
         });
+}
+
+/// Colapsa espacios y recorta a `max` caracteres (títulos y descripciones).
+fn collapse_short(text: &str, max: usize) -> String {
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > max {
+        let cut: String = collapsed.chars().take(max).collect();
+        format!("{cut}…")
+    } else {
+        collapsed
+    }
 }
 
 /// Colapsa espacios y recorta: las descripciones largas no rompen el layout.

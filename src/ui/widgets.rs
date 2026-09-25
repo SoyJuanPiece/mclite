@@ -32,6 +32,60 @@ pub fn section(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).small().strong().color(theme::MUTED));
 }
 
+/// Formatea un contador de descargas al estilo Modrinth: 1234 → "1,2 k".
+pub fn format_count(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1} M", n as f32 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1} k", n as f32 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Control segmentado con contenedor (pista redondeada, seleccionado en acento).
+pub fn segmented_boxed<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    current: T,
+    options: &[(T, &'static str, bool, Option<&'static str>)],
+) -> Option<T> {
+    let mut chosen = None;
+    egui::Frame::new()
+        .fill(theme::INPUT)
+        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (value, label, enabled, note) in options {
+                    let selected = *value == current;
+                    let text = RichText::new(*label).size(13.5).strong();
+                    let button = egui::Button::selectable(selected, text)
+                        .fill(if selected {
+                            theme::accent()
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .corner_radius(CornerRadius::same(6));
+                    let response = ui.add_enabled(*enabled, button);
+                    if response.clicked() {
+                        chosen = Some(*value);
+                    }
+                    match note {
+                        Some(note) if *enabled => {
+                            response.on_hover_text(*note);
+                        }
+                        Some(note) => {
+                            response.on_disabled_hover_text(*note);
+                        }
+                        None => {}
+                    }
+                }
+            });
+        });
+    chosen
+}
+
 /// Control segmentado (`Vanilla | Fabric | ...`).
 ///
 /// Las opciones deshabilitadas se muestran atenuadas y con la nota al pasar el

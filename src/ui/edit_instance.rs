@@ -54,23 +54,24 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             }
             ui.add_space(10.0);
 
-            widgets::section(ui, "NOMBRE");
-            ui.add(
-                egui::TextEdit::singleline(&mut app.form.name)
-                    .hint_text("Mi instancia"),
-            );
+            theme::card_section(ui, "NOMBRE", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.form.name)
+                        .hint_text("Mi instancia")
+                        .desired_width(f32::INFINITY),
+                );
+            });
 
-            ui.add_space(8.0);
-            widgets::section(ui, "VERSIÓN DE MINECRAFT");
-            ui.add(
-                egui::TextEdit::singleline(&mut app.form.mc).hint_text("1.21.4"),
-            );
-            ui.label(theme::muted(
-                "Si cambias la versión, se reinstala lo que falte al guardar (mundos y mods se quedan).",
-            ));
+            theme::card_section(ui, "VERSIÓN DE MINECRAFT", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.form.mc).hint_text("1.21.4"),
+                );
+                ui.label(theme::muted(
+                    "Si cambias la versión, se reinstala lo que falte al guardar (mundos y mods se quedan).",
+                ));
+            });
 
-            ui.add_space(8.0);
-            widgets::section(ui, "CARGADOR");
+            theme::card_section(ui, "CARGADOR", |ui| {
             if let Some(kind) = widgets::segmented(ui, app.form.loader, &loader_options) {
                 if kind != app.form.loader {
                     app.form.loader = kind;
@@ -83,8 +84,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 }
             }
             if app.form.loader != LoaderKind::Vanilla {
-                ui.horizontal(|ui| {
-                    ui.label("Versión del cargador");
+                ui.add_space(6.0);
+                theme::form_row(ui, "Versión del cargador", |ui| {
                     let selected = if app.form.loader_version.is_empty() {
                         "Última estable".to_string()
                     } else {
@@ -116,46 +117,42 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     }
                 });
             }
-
-            ui.add_space(8.0);
-            widgets::section(ui, "OPCIONES");
-            ui.horizontal(|ui| {
-                ui.label("RAM");
-                ui.add(
-                    egui::Slider::new(&mut app.form.ram_mb, 512..=16384)
-                        .logarithmic(true)
-                        .suffix(" MB"),
-                );
             });
-            ui.horizontal(|ui| {
-                ui.label("Resolución");
-                ui.add(egui::DragValue::new(&mut app.form.width).range(320..=7680));
-                ui.label("×");
-                ui.add(egui::DragValue::new(&mut app.form.height).range(200..=4320));
+
+            theme::card_section(ui, "OPCIONES", |ui| {
+                theme::form_row(ui, "RAM", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut app.form.ram_mb, 512..=16384)
+                            .logarithmic(true)
+                            .suffix(" MB"),
+                    );
+                });
+                theme::form_row(ui, "Resolución", |ui| {
+                    ui.add(egui::DragValue::new(&mut app.form.width).range(320..=7680));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut app.form.height).range(200..=4320));
+                });
             });
 
             // Sodium: solo Fabric, y en una acción aparte (no requiere reinstalar).
             if instance.loader == LoaderKind::Fabric {
-                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!busy, egui::Button::new("Instalar Sodium")).clicked() {
+                    if theme::ghost_button(ui, "Instalar Sodium").clicked() {
                         action = Some(Action::Sodium);
                     }
                     ui.label(theme::muted(
                         "Baja Sodium a mods/ de esta instancia (necesita Internet una vez).",
                     ));
                 });
+                ui.add_space(4.0);
             }
 
-            ui.add_space(12.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!busy, egui::Button::new(egui::RichText::new("Guardar").strong()))
-                    .clicked()
-                {
+                if theme::primary_button(ui, "Guardar", egui::vec2(140.0, 36.0)).clicked() {
                     action = Some(Action::Save);
                 }
-                if ui.button("Cancelar").clicked() {
+                if theme::ghost_button(ui, "Cancelar").clicked() {
                     action = Some(Action::Cancel);
                 }
                 if busy {

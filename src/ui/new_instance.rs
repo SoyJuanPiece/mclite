@@ -160,124 +160,121 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.add_space(8.0);
-            ui.label(theme::title("Nueva instancia"));
-            ui.add_space(10.0);
+            theme::screen_header(ui, "Nueva instancia", "Elige versión y cargador; lo demás va con buenos valores por defecto");
+            ui.add_space(2.0);
 
             // ── Nombre ───────────────────────────────────────────────────────
-            widgets::section(ui, "NOMBRE");
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut app.form.name).hint_text("Mi instancia"),
-            );
-            if response.changed() {
-                app.form.name_edited = true;
-            }
-
-            ui.add_space(8.0);
-
-            // ── Versión de Minecraft ─────────────────────────────────────────
-            widgets::section(ui, "VERSIÓN DE MINECRAFT");
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.form.search)
-                        .hint_text("Buscar…")
-                        .desired_width(180.0),
+            theme::card_section(ui, "NOMBRE", |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut app.form.name)
+                        .hint_text("Mi instancia")
+                        .desired_width(f32::INFINITY),
                 );
-                let mut snapshots = app.config.show_snapshots;
-                if ui.checkbox(&mut snapshots, "Mostrar snapshots").changed() {
-                    app.config.show_snapshots = snapshots;
-                    config_dirty = true;
-                }
-                let mut old = app.config.show_old_versions;
-                if ui.checkbox(&mut old, "Beta/Alpha").changed() {
-                    app.config.show_old_versions = old;
-                    config_dirty = true;
+                if response.changed() {
+                    app.form.name_edited = true;
                 }
             });
 
-            if manifest_missing {
+            // ── Versión de Minecraft ─────────────────────────────────────────
+            theme::card_section(ui, "VERSIÓN DE MINECRAFT", |ui| {
                 ui.horizontal(|ui| {
-                    if manifest_loading {
-                        ui.spinner();
-                        ui.label(theme::muted("Cargando el manifiesto de versiones…"));
-                    } else {
-                        ui.label(theme::muted("No pude cargar el manifiesto."));
-                        if ui.button("Reintentar").clicked() {
-                            action = Some(Action::RetryManifest);
-                        }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.form.search)
+                            .hint_text("Buscar…")
+                            .desired_width(180.0),
+                    );
+                    let mut snapshots = app.config.show_snapshots;
+                    if ui.checkbox(&mut snapshots, "Mostrar snapshots").changed() {
+                        app.config.show_snapshots = snapshots;
+                        config_dirty = true;
+                    }
+                    let mut old = app.config.show_old_versions;
+                    if ui.checkbox(&mut old, "Beta/Alpha").changed() {
+                        app.config.show_old_versions = old;
+                        config_dirty = true;
                     }
                 });
-            } else {
-                let mut picked: Option<String> = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("version-list")
-                    .max_height(250.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for group in &groups {
-                            ui.add_space(6.0);
-                            let title = if supported.is_some() {
-                                format!(
-                                    "{} ({} con {})",
-                                    group.title,
-                                    group.supported_total,
-                                    app.form.loader.label()
-                                )
-                            } else {
-                                format!("{} ({})", group.title, group.total)
-                            };
-                            widgets::section(ui, &title);
-                            for row in &group.rows {
-                                // Aquí solo llegan versiones soportadas: con datos
-                                // de soporte las otras ni se pintan.
-                                let text = if row.latest {
-                                    format!("{}  (última)", row.id)
-                                } else {
-                                    row.id.clone()
-                                };
-                                let selected = app.form.mc == row.id;
-                                if ui
-                                    .selectable_label(selected, text)
-                                    .clicked()
-                                {
-                                    picked = Some(row.id.clone());
-                                }
-                            }
-                            if group.total > group.rows.len() {
-                                ui.label(theme::muted(format!(
-                                    "  … y {} más (usa el buscador)",
-                                    group.total - group.rows.len()
-                                )));
+
+                if manifest_missing {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if manifest_loading {
+                            ui.spinner();
+                            ui.label(theme::muted("Cargando el manifiesto de versiones…"));
+                        } else {
+                            ui.label(theme::muted("No pude cargar el manifiesto."));
+                            if theme::ghost_button(ui, "Reintentar").clicked() {
+                                action = Some(Action::RetryManifest);
                             }
                         }
                     });
-                // Mientras llega la sonda de soporte, mejor no dejar elegir:
-                // cualquier elección podría ser de una versión que va a desaparecer.
-                if supported.is_none() && app.form.loader != LoaderKind::Vanilla {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(theme::muted(format!(
-                            "Consultando qué versiones tienen {}…",
-                            app.form.loader.label()
-                        )));
-                    });
-                }
-                if let Some(id) = picked {
-                    let changed = app.form.mc != id;
-                    app.form.mc = id;
-                    if !app.form.name_edited {
-                        app.form.name =
-                            Instance::suggested_name(app.form.loader, &app.form.mc);
+                } else {
+                    let mut picked: Option<String> = None;
+                    egui::ScrollArea::vertical()
+                        .id_salt("version-list")
+                        .max_height(250.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for group in &groups {
+                                ui.add_space(6.0);
+                                let title = if supported.is_some() {
+                                    format!(
+                                        "{} ({} con {})",
+                                        group.title,
+                                        group.supported_total,
+                                        app.form.loader.label()
+                                    )
+                                } else {
+                                    format!("{} ({})", group.title, group.total)
+                                };
+                                widgets::section(ui, &title);
+                                for row in &group.rows {
+                                    let selected = app.form.mc == row.id;
+                                    let text = if row.latest {
+                                        format!("{}  (última)", row.id)
+                                    } else {
+                                        row.id.clone()
+                                    };
+                                    if ui.selectable_label(selected, text).clicked() {
+                                        picked = Some(row.id.clone());
+                                    }
+                                }
+                                if group.total > group.rows.len() {
+                                    ui.label(theme::muted(format!(
+                                        "  … y {} más (usa el buscador)",
+                                        group.total - group.rows.len()
+                                    )));
+                                }
+                            }
+                        });
+                    // Mientras llega la sonda de soporte, mejor no dejar elegir:
+                    // cualquier elección podría ser de una versión que va a desaparecer.
+                    if supported.is_none() && app.form.loader != LoaderKind::Vanilla {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(theme::muted(format!(
+                                "Consultando qué versiones tienen {}…",
+                                app.form.loader.label()
+                            )));
+                        });
                     }
-                    if changed && app.form.loader != LoaderKind::Vanilla {
-                        action = Some(Action::FetchLoaders);
+                    if let Some(id) = picked {
+                        let changed = app.form.mc != id;
+                        app.form.mc = id;
+                        if !app.form.name_edited {
+                            app.form.name =
+                                Instance::suggested_name(app.form.loader, &app.form.mc);
+                        }
+                        if changed && app.form.loader != LoaderKind::Vanilla {
+                            action = Some(Action::FetchLoaders);
+                        }
                     }
                 }
-            }
-
-            ui.add_space(10.0);
+            });
 
             // ── Cargador ─────────────────────────────────────────────────────
-            widgets::section(ui, "CARGADOR");
+            theme::card_section(ui, "CARGADOR", |ui| {
             if let Some(kind) = widgets::segmented(ui, app.form.loader, &loader_options) {
                 if kind != app.form.loader {
                     app.form.loader = kind;
@@ -295,8 +292,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             }
 
             if app.form.loader != LoaderKind::Vanilla {
-                ui.horizontal(|ui| {
-                    ui.label("Versión del cargador");
+                ui.add_space(6.0);
+                theme::form_row(ui, "Versión del cargador", |ui| {
                     let selected = if app.form.loader_version.is_empty() {
                         "Última estable".to_string()
                     } else {
@@ -335,6 +332,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             // Sodium: solo para Fabric (OptiFine y Sodium no conviven, y en
             // vanilla/Forge/NeoForge no aplica).
             if app.form.loader == LoaderKind::Fabric {
+                ui.add_space(4.0);
                 let mut with_sodium = app.form.with_sodium;
                 if ui
                     .checkbox(&mut with_sodium, "Instalar Sodium (rendimiento)")
@@ -346,33 +344,33 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     "El reemplazo moderno de OptiFine para Fabric. Se baja de Modrinth.",
                 ));
             }
-
-            ui.add_space(10.0);
+            });
 
             // ── Opciones ─────────────────────────────────────────────────────
-            widgets::section(ui, "OPCIONES");
-            ui.horizontal(|ui| {
-                ui.label("RAM");
-                ui.add(
-                    egui::Slider::new(&mut app.form.ram_mb, 512..=16384)
-                        .logarithmic(true)
-                        .suffix(" MB"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Resolución");
-                ui.add(egui::DragValue::new(&mut app.form.width).range(320..=7680));
-                ui.label("×");
-                ui.add(egui::DragValue::new(&mut app.form.height).range(200..=4320));
+            theme::card_section(ui, "OPCIONES", |ui| {
+                theme::form_row(ui, "RAM", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut app.form.ram_mb, 512..=16384)
+                            .logarithmic(true)
+                            .suffix(" MB"),
+                    );
+                });
+                theme::form_row(ui, "Resolución", |ui| {
+                    ui.add(egui::DragValue::new(&mut app.form.width).range(320..=7680));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut app.form.height).range(200..=4320));
+                });
             });
 
             // ── Crear ────────────────────────────────────────────────────────
-            ui.add_space(12.0);
             let width = ui.available_width();
-            let create = egui::Button::new(egui::RichText::new("Crear instancia")
-                .size(17.0)
-                .strong())
+            let create = egui::Button::new(
+                egui::RichText::new("Crear instancia")
+                    .size(17.0)
+                    .family(theme::semibold()),
+            )
             .fill(theme::accent())
+            .corner_radius(egui::CornerRadius::same(10))
             .min_size(egui::vec2(width, 44.0));
             if ui.add_enabled(can_create, create).clicked() {
                 action = Some(Action::Create);

@@ -399,6 +399,56 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str, min_size: egui::Vec2) -> eg
     )
 }
 
+/// Cabecera de pantalla: título grande + subtítulo.
+pub fn screen_header(ui: &mut egui::Ui, title_text: &str, subtitle: &str) {
+    ui.add_space(4.0);
+    ui.label(title(title_text));
+    if !subtitle.is_empty() {
+        ui.label(muted(subtitle));
+    }
+    ui.add_space(6.0);
+}
+
+/// Tarjeta con rótulo de sección dentro (el patrón de Ajustes, para toda la app).
+pub fn card_section(ui: &mut egui::Ui, title_text: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .corner_radius(CornerRadius::same(RADIUS as u8))
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(title_text)
+                    .small()
+                    .strong()
+                    .color(MUTED),
+            );
+            ui.add_space(6.0);
+            body(ui);
+        });
+    ui.add_space(10.0);
+}
+
+/// Fila de formulario: etiqueta a ancho fijo + control alineado a la derecha
+/// de la etiqueta. Da la verticalidad que los formularios sueltos no tienen.
+pub fn form_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        let label_width = 150.0;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(label_width, ui.spacing().interact_size.y),
+            Sense::hover(),
+        );
+        ui.painter().text(
+            [rect.left(), rect.center().y].into(),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::new(14.0, FontFamily::Proportional),
+            TEXT,
+        );
+        control(ui);
+    });
+}
+
 /// Botón secundario: mismo cuerpo que CARD_ELEVATED, borde visible.
 pub fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
