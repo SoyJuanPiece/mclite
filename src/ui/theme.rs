@@ -429,14 +429,16 @@ pub fn card_section(ui: &mut egui::Ui, title_text: &str, body: impl FnOnce(&mut 
     ui.add_space(10.0);
 }
 
-/// Sección plegable tipo acordeón: la cabecera (siempre visible) abre o cierra
-/// el contenido con un clic. Devuelve el estado nuevo (true = abierta).
 /// Antirrebote del acordeón: la última cabecera pulsada (puntero del texto
 /// estático) y el instante (ms). Dos clics del MISMO botón en <200 ms cuentan
 /// como uno: algunos ratones/touchpads de Windows emiten doble evento.
 static LAST_TOGGLE_KEY: AtomicU64 = AtomicU64::new(0);
 static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
 
+/// Sección plegable tipo acordeón: la cabecera (siempre visible) abre o cierra
+/// el contenido con un clic. Devuelve true SOLO en el frame del clic (para
+/// que el caller escriba su estado después del cierre). El estado abierto se
+/// toma del parámetro `open`, no del retorno.
 pub fn section_toggle(
     ui: &mut egui::Ui,
     open: bool,
@@ -519,7 +521,11 @@ pub fn section_toggle(
         ui.add_space(6.0);
     }
     ui.add_space(2.0);
-    new_open
+    // Importante: devolver "hubo clic", NO el estado. Devolver el estado hacía
+    // que el caller volviera a escribir `None` en el frame siguiente y la
+    // sección se cerrara sola (~50 ms después de abrir).
+    let clicked = new_open != open;
+    clicked
 }
 
 /// Fila de formulario: etiqueta a ancho fijo + control alineado a la derecha
