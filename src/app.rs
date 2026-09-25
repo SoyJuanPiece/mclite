@@ -76,6 +76,15 @@ enum Message {
     Played {
         slug: String,
     },
+    /// El proceso del juego arrancó (para el indicador «En partida» en Home).
+    Playing {
+        slug: String,
+    },
+    /// Sesión terminada: segundos jugados para el acumulado de la instancia.
+    PlaySession {
+        slug: String,
+        secs: u64,
+    },
     Log(String),
 }
 
@@ -288,6 +297,10 @@ pub struct McLiteApp {
     pub update_url: Option<String>,
     /// (versión, url) del release disponible, para el botón Actualizar.
     pub update_available: Option<(String, String)>,
+    /// El usuario cerró el banner de update del Home (solo esta sesión).
+    pub update_banner_dismissed: bool,
+    /// Slug de la instancia con el juego corriendo ahora (para Home).
+    pub playing: Option<String>,
     /// Sección abierta en Ajustes (acordeón: solo una a la vez).
     pub settings_open: Option<&'static str>,
     /// Sección abierta en formularios Nueva instancia / Editar (acordeón).
@@ -529,6 +542,8 @@ impl McLiteApp {
             ui_ctx: None,
             update_url: None,
             update_available: None,
+            update_banner_dismissed: false,
+            playing: None,
             settings_open: None,
             form_open: None,
             skin_fingerprint: String::new(),
@@ -705,6 +720,7 @@ impl McLiteApp {
             }
             Message::GameExit(result) => {
                 self.job = None;
+                self.playing = None;
                 if result.ok {
                     self.status = format!("El juego terminó con código {}", result.code);
                 } else {
@@ -731,6 +747,20 @@ impl McLiteApp {
                     .find(|instance| instance.slug == slug)
                 {
                     instance.last_played = Some(now());
+                }
+                let _ = self.store.save(&self.paths);
+            }
+            Message::Playing { slug } => {
+                self.playing = Some(slug);
+            }
+            Message::PlaySession { slug, secs } => {
+                if let Some(instance) = self
+                    .store
+                    .instances
+                    .iter_mut()
+                    .find(|instance| instance.slug == slug)
+                {
+                    instance.playtime_secs = Some(instance.playtime_secs.unwrap_or(0) + secs);
                 }
                 let _ = self.store.save(&self.paths);
             }
@@ -1493,6 +1523,10 @@ impl McLiteApp {
                 }
             };
 
+            // La sesión corre desde que el proceso arrancó hasta que termina.
+            let session_start = std::time::Instant::now();
+            tx.send(Message::Playing { slug: request_slug(&request) });
+
             // Las líneas del juego van a la UI **y** al espejo en
             // logs/crash/<instancia>-<timestamp>.log que sobrevive al cierre.
             let game_dir = request.game_dir.clone();
@@ -1519,7 +1553,11 @@ impl McLiteApp {
                 "el juego terminó: ok={} código={}",
                 result.ok, result.code
             ));
-            tx.send(Message::Played { slug });
+            tx.send(Message::Played { slug: slug.clone() });
+            tx.send(Message::PlaySession {
+                slug,
+                secs: session_start.elapsed().as_secs(),
+            });
             tx.send(Message::GameExit(result));
         });
     }

@@ -13,6 +13,67 @@ enum Action {
     SkinSupport,
 }
 
+/// Banner de versión nueva en Home: botón directo de update + cerrar.
+fn update_banner(ui: &mut Ui, app: &mut McLiteApp) -> bool {
+    let Some((version, _url)) = app.update_available.clone() else {
+        return false;
+    };
+    if app.update_banner_dismissed {
+        return false;
+    }
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(theme::accent().gamma_multiply(0.16))
+        .stroke(egui::Stroke::new(1.0_f32, theme::accent()))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Hay una versión nueva: {version}")).strong());
+                if ui.button("Cerrar aviso").clicked() {
+                    app.update_banner_dismissed = true;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(format!("Actualizar a {version}"))
+                                .family(theme::semibold()),
+                        )
+                        .fill(theme::accent()),
+                    )
+                    .clicked()
+                {
+                    clicked = true;
+                }
+            });
+        });
+    ui.add_space(8.0);
+    clicked
+}
+
+/// Segundos → texto humano: "2 h 05 min", "48 min", "35 s".
+fn playtime_label(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{} h {:02} min", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs} s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playtime_label;
+
+    #[test]
+    fn formatea_el_tiempo_jugado() {
+        assert_eq!(playtime_label(35), "35 s");
+        assert_eq!(playtime_label(60), "1 min");
+        assert_eq!(playtime_label(2 * 3600 + 5 * 60), "2 h 05 min");
+    }
+}
+
 pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let selected = app.selected.clone();
     egui::ScrollArea::vertical()
@@ -21,6 +82,9 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.add_space(12.0);
             ui.add_space(2.0);
+            if update_banner(ui, app) {
+                app.start_update();
+            }
             match &selected {
                 None => welcome(ui, app),
                 Some(slug) => detail(ui, app, slug),
@@ -200,18 +264,34 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     let nick = app.config.username_or_default();
 
     // ── Cabecera ─────────────────────────────────────────────────────────────
+    let jugando = app.playing.as_deref() == Some(slug);
     ui.horizontal(|ui| {
-        ui.label(theme::title("Jugar"));            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(theme::title("Jugar"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(secs) = instance.playtime_secs {
                 ui.label(theme::muted(format!(
-                    "Última partida: {}",
-                    instance
-                        .last_played
-                        .as_deref()
-                        .map(pretty_timestamp)
-                        .unwrap_or_else(|| "nunca".to_string())
+                    "· jugadas: {}",
+                    playtime_label(secs)
                 )));
-            });
+            }
+            ui.label(theme::muted(format!(
+                "Última partida: {}",
+                instance
+                    .last_played
+                    .as_deref()
+                    .map(pretty_timestamp)
+                    .unwrap_or_else(|| "nunca".to_string())
+            )));
+        });
     });
+    if jugando {
+        ui.label(
+            RichText::new("● En partida")
+                .small()
+                .strong()
+                .color(theme::accent()),
+        );
+    }
     ui.add_space(4.0);
 
     let icon_uri = instance

@@ -39,6 +39,9 @@ pub struct Instance {
     pub created: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_played: Option<String>,
+    /// Segundos acumulados en partida (se suma al salir el juego).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playtime_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     /// Icono de la instancia: URL (p. ej. icono del pack en Modrinth) o vacío
@@ -109,6 +112,7 @@ impl Instance {
             java_path: None,
             created: None,
             last_played: None,
+            playtime_secs: None,
             notes: None,
             icon: None,
             from_pack: None,
