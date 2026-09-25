@@ -51,6 +51,9 @@ pub struct LauncherConfig {
     /// "violet", "rose", "amber"). `None` = verde por defecto.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
+    /// Avisar de versiones nuevas consultando GitHub al arrancar.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
 }
 
 /// Tamaño de ventana guardado entre sesiones.
@@ -94,6 +97,7 @@ impl Default for LauncherConfig {
             last_instance: None,
             window: None,
             accent: None,
+            check_updates: true,
         }
     }
 }
@@ -273,6 +277,16 @@ mod tests {
         paths.ensure().unwrap();
         LauncherConfig::default().save(&paths).unwrap();
         assert!(migrate_previous(&paths).is_none());
+    }
+
+    #[test]
+    fn check_updates_por_defecto_activo_y_relee() {
+        let paths = temp_root("check-updates");
+        assert!(LauncherConfig::load(&paths).check_updates);
+        let mut config = LauncherConfig::default();
+        config.check_updates = false;
+        config.save(&paths).unwrap();
+        assert!(!LauncherConfig::load(&paths).check_updates);
     }
 
     #[test]

@@ -66,6 +66,8 @@ enum Message {
     Failed(String),
     /// El juego terminó (bien o mal): la UI muestra la causa y el log guardado.
     GameExit(crash::GameExit),
+    /// Hay una versión más nueva en GitHub (avisar con toast).
+    UpdateAvailable { version: String, url: String },
     Played {
         slug: String,
     },
@@ -277,6 +279,8 @@ pub struct McLiteApp {
     screen_from: Option<Screen>,
     /// Contexto de egui, para repintados dirigidos desde la propia app.
     ui_ctx: Option<egui::Context>,
+    /// URL del release con la versión nueva (si el aviso de update disparó).
+    pub update_url: Option<String>,
     /// Canal hacia la GUI; cada envío despierta el repintado.
     tx: MsgTx,
     rx: Receiver<Message>,
@@ -303,6 +307,37 @@ impl McLiteApp {
         self.ui_ctx = Some(ctx);
     }
 
+    /// Comprueba en GitHub si hay release nueva (silencioso si falla o si el
+    /// usuario lo apaga). Abre la página del release con el botón del toast.
+    pub(crate) fn check_for_update(&mut self) {
+        if !self.config.check_updates {
+            return;
+        }
+        let tx = self.tx.clone();
+        let current = LAUNCHER_VERSION.to_string();
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let Ok(body) = http.get_string(
+                "https://api.github.com/repos/SoyJuanPiece/mclite/releases/latest",
+            ) else {
+                return; // sin red o GitHub caído: nada que decir
+            };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
+                return;
+            };
+            let Some(latest) = json["tag_name"].as_str().and_then(|tag| tag.strip_prefix('v')) else {
+                return;
+            };
+            if latest != current && version_is_newer(latest, &current) {
+                let url = json["html_url"].as_str().unwrap_or_default().to_string();
+                tx.send(Message::UpdateAvailable {
+                    version: latest.to_string(),
+                    url,
+                });
+            }
+        });
+    }
+
     /// Muestra una notificación flotante (dura ~4 s, máximo 3 apiladas).
     pub fn notify(&mut self, text: impl Into<String>, kind: ToastKind) {
         self.toasts.push(Toast {
@@ -323,6 +358,8 @@ impl McLiteApp {
             return;
         }
         let toasts = self.toasts.clone();
+        let update_url = self.update_url.clone();
+        let mut open_update = false;
         // Cada toast en su propio Area anclado, desplazado hacia abajo por índice.
         for (index, toast) in toasts.iter().enumerate() {
             let (color, icon) = match toast.kind {
@@ -348,8 +385,24 @@ impl McLiteApp {
                                 ui.label(egui::RichText::new(icon).color(color).size(14.0));
                                 ui.label(egui::RichText::new(&toast.text).color(theme::TEXT));
                             });
+                            // Toast de update: botón directo a la página del release.
+                            if toast.text.contains("Nueva versión") {
+                                if let Some(url) = &update_url {
+                                    if ui.small_button("Descargar").clicked() {
+                                        let _ = url.clone();
+                                        open_update = true;
+                                    }
+                                }
+                            }
                         });
                 });
+        }
+        if open_update {
+            if let Some(url) = &self.update_url {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", url])
+                    .spawn();
+            }
         }
     }
 }
@@ -393,7 +446,7 @@ impl McLiteApp {
         // Todos los hilos envían por aquí: cada send despierta la GUI.
         let tx = MsgTx(raw_tx, cc.egui_ctx.clone());
 
-        let app = Self {
+        let mut app = Self {
             paths,
             form: Form::new(config.clamped_ram()),
             config,
@@ -423,11 +476,13 @@ impl McLiteApp {
             screen_fade: 1.0,
             screen_from: None,
             ui_ctx: None,
+            update_url: None,
             tx,
             rx,
         };
         // El manifiesto baja en un hilo: su MsgTx ya despierta la GUI al llegar.
         app.load_manifest();
+        app.check_for_update();
         app
     }
 
@@ -623,6 +678,11 @@ impl McLiteApp {
                     instance.last_played = Some(now());
                 }
                 let _ = self.store.save(&self.paths);
+            }
+            Message::UpdateAvailable { version, url } => {
+                self.status = format!("McLite {version} disponible");
+                self.notify(format!("Nueva versión {version} disponible"), ToastKind::Ok);
+                self.update_url = Some(url);
             }
             Message::Log(line) => self.push_log(line),
         }
@@ -1052,6 +1112,72 @@ impl McLiteApp {
 
     // ── Trabajos ─────────────────────────────────────────────────────────────
 
+    /// Instala un .mrpack ya descargado (drag & drop): mismo flujo que un pack
+    /// de Modrinth pero sin bajar el archivo — se lee del disco.
+    pub(crate) fn start_pack_install_from_file(&mut self, file: std::path::PathBuf, name: String) {
+        if self.job.is_some() {
+            return;
+        }
+        let tx = self.tx.clone();
+        let paths = self.paths.clone();
+        let config = self.config.clone();
+
+        self.job = Some(Job {
+            label: format!("Pack {name}"),
+            phase: "Leyendo el pack".to_string(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        self.error = None;
+
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let progress = Progress::new(GuiSink::new(tx.clone()));
+            let result = (|| -> Result<String, crate::Error> {
+                let index = modrinth::read_index(&file)?;
+
+                let slug_instancia = {
+                    let mut store = InstanceStore::load(&paths);
+                    let mut instance = Instance::new(
+                        &name,
+                        index.mc_version().as_deref().unwrap_or("release"),
+                        index.loader_kind(),
+                    );
+                    instance.loader_version = index.loader_version();
+                    instance.from_pack = Some(name.clone());
+                    let slug_instancia = store.add(instance, &paths)?;
+                    store.save(&paths)?;
+                    slug_instancia
+                };
+                let game_dir = paths.instance_dir(&slug_instancia);
+                std::fs::create_dir_all(&game_dir).map_err(|e| crate::Error::io(&game_dir, e))?;
+
+                let request = PlayRequest {
+                    kind: index.loader_kind(),
+                    mc_version: index.mc_version().unwrap_or_else(|| "release".into()),
+                    loader_version: index.loader_version(),
+                    game_dir: game_dir.clone(),
+                    username: config.username_or_default(),
+                    memory_mb: config.clamped_ram(),
+                    width: 854,
+                    height: 480,
+                    java: config.java_path.clone(),
+                    extra_jvm_args: Vec::new(),
+                    filter: config.version_filter(),
+                };
+                let opts = InstallOptions::default();
+                install::prepare(&http, &paths, &request, &opts, &progress)?;
+                modrinth::install(&http, &paths, &file, &game_dir, opts.threads, &progress)?;
+                Ok(slug_instancia)
+            })();
+            match result {
+                Ok(slug) => tx.send(Message::PackInstalled(slug)),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
+    }
+
     fn install_options(&self) -> InstallOptions {
         InstallOptions {
             threads: self.config.threads.clamp(1, 16),
@@ -1415,6 +1541,25 @@ impl McLiteApp {
     }
 }
 
+/// Compara versiones "X.Y.Z": true si `candidate` es más nueva que `current`.
+fn version_is_newer(candidate: &str, current: &str) -> bool {
+    let parse = |text: &str| -> Vec<u64> {
+        text.split('.')
+            .map(|part| part.chars().filter(|c| c.is_ascii_digit()).collect::<String>())
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    };
+    let (candidate, current) = (parse(candidate), parse(current));
+    for index in 0..3 {
+        let a = candidate.get(index).copied().unwrap_or(0);
+        let b = current.get(index).copied().unwrap_or(0);
+        if a != b {
+            return a > b;
+        }
+    }
+    false
+}
+
 /// El slug de la instancia que se pidió lanzar (para marcar «última partida»).
 fn request_slug(request: &PlayRequest) -> String {
     request
@@ -1504,11 +1649,113 @@ impl eframe::App for McLiteApp {
 
         self.show_toasts(ctx);
 
+        self.handle_shortcuts(ctx);
+        self.handle_dropped_files(ctx);
+
         // Repintado por evento: los hilos despiertan la GUI al enviar (MsgTx).
         // Solo mientras hay trabajo (ETA/velocidad cambian con el tiempo) o una
         // transición en curso se necesita un pulso periódico; en reposo, 0 % CPU.
         if self.job.is_some() || self.screen_fade < 1.0 || !self.toasts.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+}
+
+impl McLiteApp {
+    /// Atajos de teclado globales.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // No mientras hay un trabajo en curso (evita lanzar dos veces, etc.).
+        let busy = self.job.is_some();
+        ctx.input(|input| {
+            let ctrl = input.modifiers.ctrl;
+            if !busy && ctrl && input.key_pressed(egui::Key::Enter) {
+                if let Some(slug) = self.selected.clone() {
+                    self.start_play(&slug);
+                }
+            }
+            if !busy && ctrl && input.key_pressed(egui::Key::N) {
+                self.open_new();
+            }
+            // Volver a Home con Esc (desde Edit/New/Modpacks).
+            if input.key_pressed(egui::Key::Escape) && self.screen != Screen::Home {
+                self.screen = Screen::Home;
+                self.confirm_delete = None;
+            }
+        });
+    }
+
+    /// Drag & drop: un .mrpack inicia la instalación del pack; un .jar se copia
+    /// a mods/ de la instancia seleccionada (solo Fabric).
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|input| input.raw.dropped_files.clone())
+            .into_iter()
+            .filter_map(|file| file.path)
+            .collect();
+        for path in dropped {
+            let extension = path
+                .extension()
+                .map(|ext| ext.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            match extension.as_str() {
+                "mrpack" => self.install_local_mrpack(path),
+                "jar" => self.install_local_jar(path),
+                other => self.notify(
+                    format!("No sé instalar .{other} (prueba .mrpack o .jar)"),
+                    ToastKind::Error,
+                ),
+            }
+        }
+    }
+
+    /// Instala un .mrpack arrastrado a la ventana (flujo del pack, sin Modrinth).
+    fn install_local_mrpack(&mut self, path: std::path::PathBuf) {
+        if self.job.is_some() {
+            self.notify("Espera a que termine lo que está en curso", ToastKind::Error);
+            return;
+        }
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Pack local".to_string());
+        self.start_pack_install_from_file(path, name);
+    }
+
+    /// Copia un .jar a mods/ de la instancia seleccionada (solo Fabric).
+    fn install_local_jar(&mut self, path: std::path::PathBuf) {
+        let Some(slug) = self.selected.clone() else {
+            self.notify("Selecciona una instancia antes de soltar mods", ToastKind::Error);
+            return;
+        };
+        let Some(instance) = self.store.find(&slug) else {
+            return;
+        };
+        if instance.loader != LoaderKind::Fabric {
+            self.notify(
+                "Los mods sueltos van en instancias Fabric",
+                ToastKind::Error,
+            );
+            return;
+        }
+        let mods_dir = instance.game_dir(&self.paths).join("mods");
+        if let Err(err) = std::fs::create_dir_all(&mods_dir) {
+            self.error = Some(crate::Error::io(&mods_dir, err).to_string());
+            return;
+        }
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_os_string())
+            .unwrap_or_default();
+        let dest = mods_dir.join(file_name);
+        match std::fs::copy(&path, &dest) {
+            Ok(_) => {
+                self.notify(
+                    format!("Mod copiado a «{}»", instance.name),
+                    ToastKind::Ok,
+                );
+            }
+            Err(err) => {
+                self.error = Some(crate::Error::io(&dest, err).to_string());
+            }
         }
     }
 }

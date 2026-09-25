@@ -40,6 +40,25 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(10.0);
 
             // ── Apariencia ───────────────────────────────────────────────────
+            card(ui, "ACTUALIZACIONES", |ui| {
+                let mut check = app.config.check_updates;
+                if ui
+                    .checkbox(
+                        &mut check,
+                        "Avisar cuando salga una versión nueva (GitHub)",
+                    )
+                    .changed()
+                {
+                    app.config.check_updates = check;
+                    config_dirty = true;
+                }
+                if let Some(url) = &app.update_url {
+                    ui.label(theme::muted(format!(
+                        "Hay una versión nueva: {url}"
+                    )));
+                }
+            });
+
             card(ui, "APARIENCIA", |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Color de acento:");

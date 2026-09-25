@@ -133,6 +133,10 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let mut go_home = false;
     let mut go_modpacks = false;
     let mut go_settings = false;
+    // Doble clic sobre una fila = JUGAR esa instancia.
+    let mut play: Option<String> = None;
+    // Menú contextual abierto (slug): se muestra tras el frame.
+    let mut menu_for: Option<String> = None;
 
     egui::Frame::new()
         .fill(theme::SIDEBAR)
@@ -242,19 +246,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         ui.add_space(2.0);
                     }
                     for row in &regular {
-                        let response = side_item(
-                            ui,
-                            row.selected,
-                            &row.name,
-                            Some(&row.sub),
-                            Some(widgets::loader_color(row.loader)),
-                            row.icon.as_deref(),
-                            theme::TEXT,
-                        );
-                        if response.clicked() {
-                            picked = Some(row.slug.clone());
-                        }
-                        response.on_hover_text(format!("Seleccionar «{}»", row.name));
+                        handle_instance_row(ui, row, &mut picked, &mut play, &mut menu_for);
                     }
 
                     // Sección 2: modpacks instalados desde Modrinth.
@@ -264,19 +256,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         ui.add_space(2.0);
                     }
                     for row in &packs {
-                        let response = side_item(
-                            ui,
-                            row.selected,
-                            &row.name,
-                            Some(&row.sub),
-                            Some(widgets::loader_color(row.loader)),
-                            row.icon.as_deref(),
-                            theme::TEXT,
-                        );
-                        if response.clicked() {
-                            picked = Some(row.slug.clone());
-                        }
-                        response.on_hover_text(format!("Seleccionar «{}»", row.name));
+                        handle_instance_row(ui, row, &mut picked, &mut play, &mut menu_for);
                     }
                 });
         });
@@ -303,6 +283,100 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         app.screen = Screen::Home;
         app.confirm_delete = None;
     }
+    if let Some(slug) = play {
+        // Doble clic: seleccionar y lanzar.
+        app.selected = Some(slug.clone());
+        app.screen = Screen::Home;
+        app.start_play(&slug);
+    }
+    if let Some(slug) = menu_for {
+        // Menú contextual: Jugar / Editar / Reparar / Carpeta / Borrar.
+        app.selected = Some(slug.clone());
+        app.screen = Screen::Home;
+        let delete_label = if app.confirm_delete.as_deref() == Some(slug.as_str()) {
+            "¿Borrar de verdad?"
+        } else {
+            "Borrar"
+        };
+        egui::Area::new(egui::Id::new("ctx-menu"))
+            .fixed_pos(ui.input(|i| i.pointer.latest_pos().unwrap_or_default()))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(theme::CARD_ELEVATED)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        ui.set_min_width(150.0);
+                        if ui.button("▶  Jugar").clicked() {
+                            app.start_play(&slug);
+                        }
+                        if ui.button("Editar").clicked() {
+                            app.open_edit(&slug);
+                        }
+                        if ui.button("Reparar").clicked() {
+                            app.start_repair(&slug);
+                        }
+                        if ui.button("Carpeta").clicked() {
+                            if let Some(instance) = app.store.find(&slug) {
+                                let dir = instance.game_dir(&app.paths);
+                                if let Err(err) = crate::core::shell::open_in_explorer(&dir) {
+                                    app.error = Some(err.to_string());
+                                }
+                            }
+                        }
+                        ui.separator();
+                        if ui.button(RichText::new(delete_label).color(theme::DANGER)).clicked() {
+                            if app.confirm_delete.as_deref() == Some(slug.as_str()) {
+                                match app.store.remove(&slug, true, &app.paths) {
+                                    Ok(_) => {
+                                        app.selected = None;
+                                        app.confirm_delete = None;
+                                        app.notify("Instancia borrada", crate::app::ToastKind::Ok);
+                                    }
+                                    Err(err) => app.error = Some(err.to_string()),
+                                }
+                            } else {
+                                app.confirm_delete = Some(slug.clone());
+                            }
+                        }
+                    });
+            });
+    }
+}
+
+/// Una fila de instancia: selección con clic, JUGAR con doble clic y menú
+/// contextual con clic derecho. Encapsulado porque se usa en ambas secciones.
+fn handle_instance_row(
+    ui: &mut Ui,
+    row: &InstanceRow,
+    picked: &mut Option<String>,
+    play: &mut Option<String>,
+    menu_for: &mut Option<String>,
+) {
+    let response = side_item(
+        ui,
+        row.selected,
+        &row.name,
+        Some(&row.sub),
+        Some(widgets::loader_color(row.loader)),
+        row.icon.as_deref(),
+        theme::TEXT,
+    );
+    if response.clicked() {
+        *picked = Some(row.slug.clone());
+    }
+    if response.double_clicked() {
+        *play = Some(row.slug.clone());
+    }
+    if response.secondary_clicked() {
+        *menu_for = Some(row.slug.clone());
+    }
+    response.on_hover_text(format!(
+        "Seleccionar «{}» (doble clic para jugar, clic derecho para más)",
+        row.name
+    ));
 }
 
 /// Rótulo de sección en gris.

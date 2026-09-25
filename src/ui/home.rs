@@ -36,11 +36,73 @@ fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
         ui.label(theme::title("McLite"));
         ui.add_space(4.0);
         ui.label(theme::muted("Launcher lite de Minecraft · cuentas offline"));
-        ui.add_space(20.0);
-        if theme::primary_button(ui, "Crear una instancia", egui::vec2(220.0, 38.0)).clicked() {
-            app.open_new();
-        }
+        ui.add_space(16.0);
     });
+
+    // Onboarding de 2 clics: nick + acento + crear, todo en una tarjeta.
+    let mut dirty = false;
+    let mut go_new = false;
+    theme::card_section(ui, "EMPIEZA AQUÍ", |ui| {
+        ui.label(theme::muted(
+            "1 · ¿Cómo te llamas en el juego? (podrás cambiarlo en Ajustes)",
+        ));
+        let mut nick = app.config.username.clone().unwrap_or_default();
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut nick)
+                .hint_text("Tu nick (3–16 caracteres)")
+                .desired_width(260.0),
+        );
+        if response.changed() {
+            app.config.username = if nick.trim().is_empty() {
+                None
+            } else {
+                Some(nick.trim().to_string())
+            };
+            dirty = true;
+        }
+        ui.add_space(8.0);
+        ui.label(theme::muted("2 · Elige tu color:"));
+        ui.horizontal(|ui| {
+            for accent in theme::ACCENTS {
+                let chosen = app.config.accent.as_deref() == Some(accent.key());
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(24.0, 24.0),
+                    egui::Sense::click(),
+                );
+                ui.painter().circle_filled(rect.center(), 10.0, accent.color());
+                if chosen {
+                    ui.painter().circle_stroke(
+                        rect.center(),
+                        12.0,
+                        egui::Stroke::new(2.0_f32, theme::TEXT),
+                    );
+                }
+                if response.clicked() {
+                    app.config.accent = Some(accent.key().to_string());
+                    theme::set_accent(accent);
+                    theme::reapply_accent(ui.ctx());
+                    dirty = true;
+                }
+                response.on_hover_text(accent.name());
+            }
+        });
+        ui.add_space(10.0);
+        if theme::primary_button(ui, "Crear mi primera instancia →", egui::vec2(260.0, 36.0))
+            .clicked()
+        {
+            go_new = true;
+        }
+        ui.label(theme::muted(
+            "Consejo: también puedes arrastrar un .mrpack aquí para instalar un modpack",
+        ));
+    });
+
+    if dirty {
+        let _ = app.config.save(&app.paths);
+    }
+    if go_new {
+        app.open_new();
+    }
 }
 
 /// Banner de la instancia: icono/avatar, nombre, datos y badges; la ruta de
