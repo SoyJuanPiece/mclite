@@ -162,7 +162,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             if side_item(
                 ui,
                 screen == Screen::Modpacks,
-                "◈  Modpacks",
+                "■  Modpacks",
                 None,
                 None,
                 None,
@@ -186,7 +186,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 go_settings = true;
             }
             // Acción destacada, no navegación.
-            let create = egui::Button::new(RichText::new("＋  Nueva instancia").strong())
+            let create = egui::Button::new(RichText::new("+  Nueva instancia").family(theme::semibold()))
                 .fill(theme::accent().gamma_multiply(0.25))
                 .stroke(egui::Stroke::new(1.0_f32, theme::accent()))
                 .corner_radius(CornerRadius::same(8))

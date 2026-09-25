@@ -7,8 +7,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use egui::{
-    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, RichText, Sense,
-    Stroke, TextStyle, Visuals,
+    Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, RichText,
+    Sense, Stroke, TextStyle, Visuals,
 };
 
 pub const ACCENT: Color32 = Color32::from_rgb(0x3C, 0x85, 0x27);
@@ -279,7 +279,8 @@ pub fn avatar_fill(nick: &str) -> Color32 {
     )
 }
 
-/// Círculo con las iniciales del nick. `size` en px.
+/// Círculo con las iniciales del nick, pintado a mano (tamaño exacto, sin
+/// depender del layout). `size` en px.
 pub fn avatar(ui: &mut egui::Ui, nick: &str, size: f32) {
     let (initials, fill) = if nick.trim().is_empty() {
         ("?".to_owned(), Color32::from_rgb(0x30, 0x38, 0x30))
@@ -300,20 +301,16 @@ pub fn avatar(ui: &mut egui::Ui, nick: &str, size: f32) {
         };
         (initials.to_uppercase(), avatar_fill(nick))
     };
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(size as u8 / 2))
-        .show(ui, |ui| {
-            ui.set_min_size(egui::vec2(size, size));
-            ui.centered_and_justified(|ui| {
-                ui.label(
-                    RichText::new(&initials)
-                        .size(size * 0.42)
-                        .family(semibold())
-                        .color(Color32::WHITE),
-                );
-            });
-        });
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
+    let center = rect.center();
+    ui.painter().circle_filled(center, size / 2.0, fill);
+    ui.painter().text(
+        center,
+        Align2::CENTER_CENTER,
+        &initials,
+        FontId::new(size * 0.38, semibold()),
+        Color32::WHITE,
+    );
 }
 
 /// Logo: bloque de hierba de Minecraft pintado a mano (tierra + césped con
