@@ -43,6 +43,28 @@ pub fn format_count(n: u64) -> String {
     }
 }
 
+/// Recorta texto largo con elipsis al centro: útil para rutas y valores
+/// largos en pistas de una línea ("...\\versions\\1.21.4").
+pub fn collapse(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep / 2;
+    let tail = keep - head;
+    let start = text
+        .char_indices()
+        .nth(count - tail)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let mut out = String::new();
+    out.push_str(&text.chars().take(head).collect::<String>());
+    out.push('…');
+    out.push_str(&text[start..]);
+    out
+}
+
 /// Control segmentado con contenedor (pista redondeada, seleccionado en acento).
 pub fn segmented_boxed<T: PartialEq + Copy>(
     ui: &mut Ui,

@@ -164,19 +164,35 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(2.0);
 
             // ── Nombre ───────────────────────────────────────────────────────
-            theme::card_section(ui, "NOMBRE", |ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut app.form.name)
-                        .hint_text("Mi instancia")
+            let open = app.form_open == Some("NAME");
+            let toggled = theme::section_toggle(
+                ui,
+                open,
+                "NOMBRE",
+                &widgets::collapse(app.form.name.trim(), 24),
+                |ui| {
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut app.form.name)
+                            .hint_text("Mi instancia")
                         .desired_width(f32::INFINITY),
-                );
-                if response.changed() {
-                    app.form.name_edited = true;
-                }
-            });
+                    );
+                    if response.changed() {
+                        app.form.name_edited = true;
+                    }
+                },
+            );
+            if toggled {
+                app.form_open = if open { None } else { Some("NAME") };
+            }
 
-            // ── Versión de Minecraft ─────────────────────────────────────────
-            theme::card_section(ui, "VERSIÓN DE MINECRAFT", |ui| {
+            // ── Versión de Minecraft ─────────────────────────────────────
+            let open = app.form_open == Some("MC");
+            let mc_hint = if app.form.mc.is_empty() {
+                "sin elegir".to_string()
+            } else {
+                format!("{} · {}", app.form.mc, app.form.loader.label())
+            };
+            let toggled = theme::section_toggle(ui, open, "VERSIÓN DE MINECRAFT", &mc_hint, |ui| {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut app.form.search)
@@ -272,9 +288,20 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     }
                 }
             });
+            if toggled {
+                app.form_open = if open { None } else { Some("MC") };
+            }
 
             // ── Cargador ─────────────────────────────────────────────────────
-            theme::card_section(ui, "CARGADOR", |ui| {
+            let open = app.form_open == Some("LOADER");
+            let loader_hint = if app.form.loader == LoaderKind::Vanilla {
+                "Vanilla".to_string()
+            } else if app.form.loader_version.is_empty() {
+                format!("{}, última estable", app.form.loader.label())
+            } else {
+                format!("{}, {}", app.form.loader.label(), app.form.loader_version)
+            };
+            let toggled = theme::section_toggle(ui, open, "CARGADOR", &loader_hint, |ui| {
             if let Some(kind) = widgets::segmented(ui, app.form.loader, &loader_options) {
                 if kind != app.form.loader {
                     app.form.loader = kind;
@@ -345,9 +372,17 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 ));
             }
             });
+            if toggled {
+                app.form_open = if open { None } else { Some("LOADER") };
+            }
 
             // ── Opciones ─────────────────────────────────────────────────────
-            theme::card_section(ui, "OPCIONES", |ui| {
+            let open = app.form_open == Some("OPTS");
+            let opts_hint = format!(
+                "{} MB · {}×{}",
+                app.form.ram_mb, app.form.width, app.form.height
+            );
+            let toggled = theme::section_toggle(ui, open, "OPCIONES", &opts_hint, |ui| {
                 theme::form_row(ui, "RAM", |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.form.ram_mb, 512..=16384)
@@ -361,6 +396,9 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     ui.add(egui::DragValue::new(&mut app.form.height).range(200..=4320));
                 });
             });
+            if toggled {
+                app.form_open = if open { None } else { Some("OPTS") };
+            }
 
             // ── Crear ────────────────────────────────────────────────────────
             let width = ui.available_width();

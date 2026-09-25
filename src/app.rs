@@ -290,6 +290,8 @@ pub struct McLiteApp {
     pub update_available: Option<(String, String)>,
     /// Sección abierta en Ajustes (acordeón: solo una a la vez).
     pub settings_open: Option<&'static str>,
+    /// Sección abierta en formularios Nueva instancia / Editar (acordeón).
+    pub form_open: Option<&'static str>,
     /// Fingerprint de la skin aplicada (refrescar la preview en Ajustes).
     pub skin_fingerprint: String,
     /// Canal hacia la GUI; cada envío despierta el repintado.
@@ -528,6 +530,7 @@ impl McLiteApp {
             update_url: None,
             update_available: None,
             settings_open: None,
+            form_open: None,
             skin_fingerprint: String::new(),
             tx,
             rx,
