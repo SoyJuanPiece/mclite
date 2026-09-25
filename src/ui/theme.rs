@@ -439,38 +439,55 @@ pub fn section_toggle(
     body: impl FnOnce(&mut egui::Ui),
 ) -> bool {
     let mut new_open = open;
-    let header = egui::Frame::new()
-        .fill(CARD)
-        .stroke(Stroke::new(1.0_f32, BORDER))
-        .corner_radius(CornerRadius::same(RADIUS as u8))
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let icon = if open { "-" } else { "+" };
-                ui.label(
-                    RichText::new(icon)
-                        .strong()
-                        .color(if open { TEXT } else { MUTED }),
-                );
-                ui.label(
-                    RichText::new(title_text)
-                        .small()
-                        .strong()
-                        .color(if open { TEXT } else { MUTED }),
-                );
-                if !hint.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(hint).small().color(MUTED));
-                    });
-                }
-            });
-        });
-    if header
-        .response
-        .interact(egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .clicked()
-    {
+
+    // Cabecera como un ÚNICO widget clicable: se reserva el rect con sense
+    // de clic y se pinta a mano. (Un Frame + interact extra registraba dos
+    // widgets con el mismo id y egui disparaba el clic dos veces: la sección
+    // se abría y cerraba al instante.)
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 26.0),
+        Sense::click(),
+    );
+    let (bg, fg, icon_color) = if response.hovered() {
+        (CARD_ELEVATED, TEXT, TEXT)
+    } else {
+        (CARD, MUTED, MUTED)
+    };
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, CornerRadius::same(RADIUS as u8), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(RADIUS as u8),
+        Stroke::new(1.0_f32, BORDER),
+        egui::StrokeKind::Inside,
+    );
+    let icon = if open { "-" } else { "+" };
+    p.text(
+        [rect.left() + 12.0, rect.center().y].into(),
+        Align2::LEFT_CENTER,
+        icon,
+        FontId::proportional(13.0),
+        icon_color,
+    );
+    let title_x = rect.left() + 12.0 + 8.0 + 10.0;
+    p.text(
+        [title_x, rect.center().y].into(),
+        Align2::LEFT_CENTER,
+        title_text,
+        FontId::proportional(12.0),
+        fg,
+    );
+    if !hint.is_empty() {
+        p.text(
+            [rect.right() - 12.0, rect.center().y].into(),
+            Align2::RIGHT_CENTER,
+            hint,
+            FontId::proportional(12.0),
+            icon_color,
+        );
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
         new_open = !open;
     }
     ui.add_space(4.0);
