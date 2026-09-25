@@ -43,9 +43,20 @@ fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
     });
 }
 
-/// Banner de la instancia: avatar grande, nombre, badges y datos.
-fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str, icon: Option<&str>) {
-    egui::Frame::new()
+/// Banner de la instancia: icono/avatar, nombre, datos y badges; la ruta de
+/// la carpeta vive en el tooltip para no ensuciar (ni desbordar) el layout.
+fn hero(
+    ui: &mut Ui,
+    name: &str,
+    nick: &str,
+    sub: &str,
+    dir: &str,
+    icon: Option<&str>,
+    loader: crate::loaders::LoaderKind,
+    mc: &str,
+    loader_version: Option<&str>,
+) {
+    let inner = egui::Frame::new()
         .fill(Color32::from_rgb(0x1B, 0x2B, 0x1B))
         .stroke(Stroke::new(1.0_f32, theme::BORDER))
         .corner_radius(CornerRadius::same(10))
@@ -65,34 +76,35 @@ fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str, icon: Option<
                 }
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(name).size(22.0).strong());
+                        ui.label(
+                            RichText::new(name)
+                                .size(22.0)
+                                .family(theme::semibold()),
+                        );
                         ui.label(theme::muted(format!("· {nick}")));
                     });
                     ui.label(theme::muted(sub));
                 });
             });
-            ui.add_space(4.0);
-            ui.label(theme::muted(format!("Carpeta: {}", short_path(dir))));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                widgets::badge(ui, loader.label(), widgets::loader_color(loader));
+                widgets::badge(ui, mc, theme::accent());
+                if let Some(version) = loader_version {
+                    widgets::badge(ui, version, theme::CARD_ELEVATED);
+                }
+            });
             ui.add_space(2.0);
         });
+    inner
+        .response
+        .on_hover_text(format!("Carpeta: {dir}"));
+
     // Línea de acento bajo el banner (recorre todo el ancho).
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::same(2), theme::accent());
-}
-
-/// Ruta corta para mostrar: últimos 3 componentes con prefijo "…".
-fn short_path(dir: &str) -> String {
-    let parts: Vec<&str> = dir
-        .split(['/', '\\'])
-        .filter(|part| !part.is_empty())
-        .collect();
-    if parts.len() > 3 {
-        format!("…\\{}", parts[parts.len() - 3..].join("\\"))
-    } else {
-        dir.to_string()
-    }
 }
 
 /// "2026-09-25T04:40:02Z" → "25/09/2026 04:40". Si no encaja el formato, tal cual.
@@ -152,16 +164,10 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         ),
         &instance.game_dir(&app.paths).display().to_string(),
         instance.icon.as_deref(),
+        instance.loader,
+        &instance.mc_version,
+        instance.loader_version.as_deref(),
     );
-
-    // Badges sobre el banner.
-    ui.horizontal(|ui| {
-        widgets::badge(ui, instance.loader.label(), widgets::loader_color(instance.loader));
-        widgets::badge(ui, &instance.mc_version, theme::accent());
-        if let Some(loader_version) = &instance.loader_version {
-            widgets::badge(ui, loader_version, theme::CARD_ELEVATED);
-        }
-    });
     ui.add_space(14.0);
 
     // ── Acciones: JUGAR + columna de gestión a la derecha ────────────────────

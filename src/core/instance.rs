@@ -45,6 +45,10 @@ pub struct Instance {
     /// para usar el avatar derivado del nombre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Título del pack de Modrinth del que nació, si es un modpack instalado.
+    /// Sirve para agruparlas en el lateral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_pack: Option<String>,
 }
 
 fn default_ram() -> u32 {
@@ -76,6 +80,7 @@ impl Instance {
             last_played: None,
             notes: None,
             icon: None,
+            from_pack: None,
         }
     }
 

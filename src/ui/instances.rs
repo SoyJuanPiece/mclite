@@ -1,7 +1,8 @@
-//! Panel lateral: marca, cuenta, navegación y lista de instancias.
+//! Panel lateral: marca, cuenta compacta, navegación e instancias agrupadas.
 //!
-//! Las filas se pintan a mano (painter) para tener avatar, dos líneas de texto
-//! y barra de acento en la seleccionada, algo que los widgets estándar no dan.
+//! Las filas se pintan a mano (painter + ui hijo) para tener avatar o icono,
+//! dos líneas de texto y barra de acento en la seleccionada. Las instancias
+//! nacidas de un pack de Modrinth se agrupan en su propia sección.
 
 use egui::{Color32, CornerRadius, RichText, Sense, Ui, Vec2};
 
@@ -82,28 +83,43 @@ fn side_item(
     response
 }
 
+/// Datos de una fila de instancia ya filtrada.
+struct InstanceRow {
+    slug: String,
+    name: String,
+    sub: String,
+    loader: LoaderKind,
+    icon: Option<String>,
+    selected: bool,
+}
+
 pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
-    // Filas filtradas por el buscador (nombre o versión de MC).
+    // Filtrado por nombre o versión de MC (insensible a mayúsculas).
     let filter = app.sidebar_search.trim().to_lowercase();
-    let rows: Vec<(String, String, String, LoaderKind, Option<String>)> = app
-        .store
-        .instances
-        .iter()
-        .filter(|instance| {
-            filter.is_empty()
-                || instance.name.to_lowercase().contains(&filter)
-                || instance.mc_version.to_lowercase().contains(&filter)
-        })
-        .map(|instance| {
-            (
-                instance.slug.clone(),
-                instance.name.clone(),
-                format!("{} · {}", instance.mc_version, instance.loader.label()),
-                instance.loader,
-                instance.icon.clone(),
-            )
-        })
-        .collect();
+    let matches = |name: &str, mc: &str| {
+        filter.is_empty() || name.to_lowercase().contains(&filter) || mc.to_lowercase().contains(&filter)
+    };
+
+    let mut regular: Vec<InstanceRow> = Vec::new();
+    let mut packs: Vec<InstanceRow> = Vec::new();
+    for instance in &app.store.instances {
+        if !matches(&instance.name, &instance.mc_version) {
+            continue;
+        }
+        let row = InstanceRow {
+            slug: instance.slug.clone(),
+            name: instance.name.clone(),
+            sub: format!("{} · {}", instance.mc_version, instance.loader.label()),
+            loader: instance.loader,
+            icon: instance.icon.clone(),
+            selected: app.selected.as_deref() == Some(instance.slug.as_str()),
+        };
+        if instance.from_pack.is_some() {
+            packs.push(row);
+        } else {
+            regular.push(row);
+        }
+    }
 
     let screen = app.screen;
     let nick = app.config.username_or_default();
@@ -117,7 +133,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .fill(theme::SIDEBAR)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            // ── Marca ────────────────────────────────────────────────────────
+            // ── Marca + cuenta, en una fila compacta ─────────────────────────
             ui.horizontal(|ui| {
                 theme::grass_block(ui, 26.0);
                 ui.label(
@@ -128,30 +144,21 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 );
                 ui.label(theme::muted(format!("v{LAUNCHER_VERSION}")));
             });
-            ui.add_space(10.0);
+            ui.add_space(6.0);
 
-            // ── Cuenta (clic = Ajustes) ─────────────────────────────────────
-            let user = egui::Frame::new()
-                .fill(theme::CARD)
-                .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        theme::avatar(ui, &nick, 30.0);
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(&nick).strong().size(14.0));
-                            ui.label(theme::muted("cuenta offline"));
-                        });
-                    });
+            // Cuenta: avatar pequeño + nick; el clic lleva a Ajustes.
+            let user = ui
+                .horizontal(|ui| {
+                    theme::avatar(ui, &nick, 18.0);
+                    ui.label(RichText::new(&nick).size(12.5).color(theme::MUTED));
                 })
                 .response
                 .interact(Sense::click());
             if user.clicked() {
                 go_settings = true;
             }
-            user.on_hover_text("Cambiar tu nick en Ajustes");
-            ui.add_space(10.0);
+            user.on_hover_text(format!("Cuenta offline de {nick} — clic para cambiar el nick"));
+            ui.add_space(8.0);
 
             // ── Navegación ──────────────────────────────────────────────────
             if side_item(ui, screen == Screen::Home, "▶  Jugar", None, None, None, theme::TEXT)
@@ -186,21 +193,22 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 go_settings = true;
             }
             // Acción destacada, no navegación.
-            let create = egui::Button::new(RichText::new("+  Nueva instancia").family(theme::semibold()))
-                .fill(theme::accent().gamma_multiply(0.25))
-                .stroke(egui::Stroke::new(1.0_f32, theme::accent()))
-                .corner_radius(CornerRadius::same(8))
-                .min_size(Vec2::new(ui.available_width(), 30.0));
+            let create =
+                egui::Button::new(RichText::new("+  Nueva instancia").family(theme::semibold()))
+                    .fill(theme::accent().gamma_multiply(0.25))
+                    .stroke(egui::Stroke::new(1.0_f32, theme::accent()))
+                    .corner_radius(CornerRadius::same(8))
+                    .min_size(Vec2::new(ui.available_width(), 30.0));
             if ui.add(create).clicked() {
                 go_new = true;
             }
 
-            ui.add_space(10.0);
-            ui.separator();
+            ui.add_space(8.0);
 
-            // ── Lista de instancias ─────────────────────────────────────────
-            widgets_section(ui, &format!("INSTANCIAS ({})", rows.len()));
-            if app.store.instances.len() > 4 {
+            // ── Lista agrupada ──────────────────────────────────────────────
+            let total = regular.len() + packs.len();
+            widgets_section(ui, &format!("INSTANCIAS ({total})"));
+            if total > 4 {
                 ui.add(
                     egui::TextEdit::singleline(&mut app.sidebar_search)
                         .hint_text("Buscar…")
@@ -213,28 +221,57 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 .id_salt("sidebar-instances")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    if rows.is_empty() {
+                    if total == 0 {
                         ui.add_space(4.0);
                         ui.label(theme::muted(if app.store.instances.is_empty() {
                             "Todavía no hay ninguna."
                         } else {
                             "Ninguna coincide con la búsqueda."
                         }));
+                        return;
                     }
-                    for (slug, name, sub, loader, icon) in &rows {
+
+                    // Sección 1: las que creaste a mano.
+                    if !regular.is_empty() {
+                        widgets_section(ui, &format!("TUS INSTANCIAS ({})", regular.len()));
+                        ui.add_space(2.0);
+                    }
+                    for row in &regular {
                         let response = side_item(
                             ui,
-                            app.selected.as_deref() == Some(slug.as_str()),
-                            name,
-                            Some(sub),
-                            Some(widgets::loader_color(*loader)),
-                            icon.as_deref(),
+                            row.selected,
+                            &row.name,
+                            Some(&row.sub),
+                            Some(widgets::loader_color(row.loader)),
+                            row.icon.as_deref(),
                             theme::TEXT,
                         );
                         if response.clicked() {
-                            picked = Some(slug.clone());
+                            picked = Some(row.slug.clone());
                         }
-                        response.on_hover_text(format!("Seleccionar «{name}»"));
+                        response.on_hover_text(format!("Seleccionar «{}»", row.name));
+                    }
+
+                    // Sección 2: modpacks instalados desde Modrinth.
+                    if !packs.is_empty() {
+                        ui.add_space(6.0);
+                        widgets_section(ui, &format!("MODPACKS ({})", packs.len()));
+                        ui.add_space(2.0);
+                    }
+                    for row in &packs {
+                        let response = side_item(
+                            ui,
+                            row.selected,
+                            &row.name,
+                            Some(&row.sub),
+                            Some(widgets::loader_color(row.loader)),
+                            row.icon.as_deref(),
+                            theme::TEXT,
+                        );
+                        if response.clicked() {
+                            picked = Some(row.slug.clone());
+                        }
+                        response.on_hover_text(format!("Seleccionar «{}»", row.name));
                     }
                 });
         });

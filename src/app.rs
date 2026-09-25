@@ -911,9 +911,9 @@ impl McLiteApp {
                 // 1) Juego base con el loader y la versión del índice.
                 let slug_instancia = {
                     let mut store = InstanceStore::load(&paths);
-                    let instance = Instance::new(&name, index.mc_version().as_deref().unwrap_or("release"), index.loader_kind());
-                    let mut instance = instance;
+                    let mut instance = Instance::new(&name, index.mc_version().as_deref().unwrap_or("release"), index.loader_kind());
                     instance.loader_version = index.loader_version();
+                    instance.from_pack = Some(name.clone());
                     let slug_instancia = store.add(instance, &paths)?;
                     store.save(&paths)?;
                     slug_instancia
