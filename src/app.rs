@@ -72,14 +72,88 @@ enum Message {
     Log(String),
 }
 
-/// Puente entre el `Progress` del core y la GUI. Va dentro de un `Mutex` para
-/// que el sink sea `Sync` y pueda vivir en los hilos de descarga.
-struct GuiSink(Mutex<Sender<Message>>);
+/// Puente entre el `Progress` del core y la GUI.
+///
+/// Dos trabajos, los dos clave para el rendimiento:
+///
+/// 1. **Despertar la GUI por evento.** Cada envío pide un repintado (`request_repaint`),
+///    así la app reposa al 0 % de CPU cuando no pasa nada y se redibuja solo cuando
+///    llega algo — en vez de repintar 8 veces por segundo "por si acaso".
+/// 2. **Coalescer el progreso.** Con miles de descargas pequeñas los `Advance` llegan
+///    más rápido de lo que vale un frame; se acumulan y se envían juntos como máximo
+///    cada ~33 ms (≈30 fps de barra). Fase y mensajes pasan al instante.
+struct GuiSink {
+    tx: Mutex<MsgTx>,
+    /// Acumulador de Advance pendientes + instante del último envío.
+    pending: Mutex<(u64, std::time::Instant)>,
+}
+
+/// Ventana de agregación del progreso: un frame a 30 fps.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// Canal de mensajes que despierta la GUI en cada envío. Todos los hilos lo
+/// usan: así ningún mensaje (manifiesto, fin de trabajo, línea del juego…)
+/// se queda dormido esperando un repintado que no va a llegar.
+#[derive(Clone)]
+struct MsgTx(Sender<Message>, egui::Context);
+
+impl MsgTx {
+    fn send(&self, message: Message) {
+        let _ = self.0.send(message);
+        self.1.request_repaint();
+    }
+}
+
+impl GuiSink {
+    fn new(msg_tx: MsgTx) -> Self {
+        Self {
+            tx: Mutex::new(msg_tx),
+            pending: Mutex::new((0, std::time::Instant::now() - PROGRESS_INTERVAL)),
+        }
+    }
+
+    /// Envía lo acumulado ya (fin de trabajo, fase nueva, etc.).
+    fn flush_pending(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            let (accumulated, _) = std::mem::replace(
+                &mut *pending,
+                (0, std::time::Instant::now()),
+            );
+            if accumulated > 0 {
+                if let Ok(tx) = self.tx.lock() {
+                    tx.send(Message::Progress(ProgressEvent::Advance(accumulated)));
+                    tx.1.request_repaint();
+                }
+            }
+        }
+    }
+}
 
 impl ProgressSink for GuiSink {
     fn emit(&self, event: ProgressEvent) {
-        if let Ok(tx) = self.0.lock() {
-            let _ = tx.send(Message::Progress(event));
+        match event {
+            ProgressEvent::Advance(step) => {
+                let due = {
+                    let Ok(mut pending) = self.pending.lock() else {
+                        return;
+                    };
+                    pending.0 += step;
+                    let due = pending.1.elapsed() >= PROGRESS_INTERVAL;
+                    if due {
+                        pending.1 = std::time::Instant::now();
+                    }
+                    due
+                };
+                if due {
+                    self.flush_pending();
+                }
+            }
+            // Fases, mensajes y demás: urgentes, sin coalescer.
+            other => {
+                if let Ok(tx) = self.tx.lock() {
+                    tx.send(Message::Progress(other));
+                }
+            }
         }
     }
 }
@@ -201,7 +275,10 @@ pub struct McLiteApp {
     pub screen_fade: f32,
     /// Pantalla desde la que se viene, para animar la entrada.
     screen_from: Option<Screen>,
-    tx: Sender<Message>,
+    /// Contexto de egui, para repintados dirigidos desde la propia app.
+    ui_ctx: Option<egui::Context>,
+    /// Canal hacia la GUI; cada envío despierta el repintado.
+    tx: MsgTx,
     rx: Receiver<Message>,
 }
 
@@ -220,6 +297,12 @@ pub enum ToastKind {
 }
 
 impl McLiteApp {
+    /// Guarda el contexto de egui (no hace falta ya que `MsgTx` lo lleva,
+    /// pero conserva la puerta para futuros usos de repintado dirigido).
+    pub fn set_ui_ctx(&mut self, ctx: egui::Context) {
+        self.ui_ctx = Some(ctx);
+    }
+
     /// Muestra una notificación flotante (dura ~4 s).
     pub fn notify(&mut self, text: impl Into<String>, kind: ToastKind) {
         self.toasts.push(Toast {
@@ -298,7 +381,9 @@ impl McLiteApp {
                     .first()
                     .map(|instance| instance.slug.clone())
             });
-        let (tx, rx) = channel();
+        let (raw_tx, rx) = channel();
+        // Todos los hilos envían por aquí: cada send despierta la GUI.
+        let tx = MsgTx(raw_tx, cc.egui_ctx.clone());
 
         let app = Self {
             paths,
@@ -329,9 +414,11 @@ impl McLiteApp {
             toasts: Vec::new(),
             screen_fade: 1.0,
             screen_from: None,
+            ui_ctx: None,
             tx,
             rx,
         };
+        // El manifiesto baja en un hilo: su MsgTx ya despierta la GUI al llegar.
         app.load_manifest();
         app
     }
@@ -576,10 +663,10 @@ impl McLiteApp {
             let http = HttpClient::new();
             match install::fetch_manifest(&http, &paths) {
                 Ok(manifest) => {
-                    let _ = tx.send(Message::Manifest(manifest));
+                    tx.send(Message::Manifest(manifest));
                 }
                 Err(err) => {
-                    let _ = tx.send(Message::ManifestFailed(err.to_string()));
+                    tx.send(Message::ManifestFailed(err.to_string()));
                 }
             }
         });
@@ -613,7 +700,7 @@ impl McLiteApp {
                 filter: VersionFilter::default(),
             };
             let supported = loaders::supported_mcs(&ctx, kind);
-            let _ = tx.send(Message::SupportedMcs(supported));
+            tx.send(Message::SupportedMcs(supported));
         });
     }
 
@@ -650,7 +737,7 @@ impl McLiteApp {
             let result = loaders::get(kind)
                 .list_versions(&ctx, &mc)
                 .map_err(|err| err.to_string());
-            let _ = tx.send(Message::LoaderVersions { mc, kind, result });
+            tx.send(Message::LoaderVersions { mc, kind, result });
         });
     }
 
@@ -750,7 +837,7 @@ impl McLiteApp {
 
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            let progress = Progress::new(GuiSink(Mutex::new(tx.clone())));
+            let progress = Progress::new(GuiSink::new(tx.clone()));
             let result = (|| -> Result<String, crate::Error> {
                 let Some(sodium) = crate::core::sodium::latest_for(&http, &mc)? else {
                     return Ok(format!("Sodium aún no soporta Minecraft {mc}"));
@@ -764,10 +851,10 @@ impl McLiteApp {
             })();
             match result {
                 Ok(status) => {
-                    let _ = tx.send(Message::JobDone(status));
+                    tx.send(Message::JobDone(status));
                 }
                 Err(err) => {
-                    let _ = tx.send(Message::Failed(err.to_string()));
+                    tx.send(Message::Failed(err.to_string()));
                 }
             }
         });
@@ -819,10 +906,10 @@ impl McLiteApp {
             let http = HttpClient::new();
             match modrinth::search(&http, &query, 20) {
                 Ok(hits) => {
-                    let _ = tx.send(Message::PackSearch(hits));
+                    tx.send(Message::PackSearch(hits));
                 }
                 Err(err) => {
-                    let _ = tx.send(Message::PackSearchFailed(err.to_string()));
+                    tx.send(Message::PackSearchFailed(err.to_string()));
                 }
             }
         });
@@ -844,10 +931,10 @@ impl McLiteApp {
                 let http = HttpClient::new();
                 match modrinth::detail(&http, &slug_detail) {
                     Ok(detail) => {
-                        let _ = tx.send(Message::PackDetail(detail));
+                        tx.send(Message::PackDetail(detail));
                     }
                     Err(err) => {
-                        let _ = tx.send(Message::PackDetailFailed(err.to_string()));
+                        tx.send(Message::PackDetailFailed(err.to_string()));
                     }
                 }
             });
@@ -857,10 +944,10 @@ impl McLiteApp {
             let http = HttpClient::new();
             match modrinth::versions(&http, &slug) {
                 Ok(versions) => {
-                    let _ = tx.send(Message::PackVersions { slug, versions });
+                    tx.send(Message::PackVersions { slug, versions });
                 }
                 Err(err) => {
-                    let _ = tx.send(Message::PackVersionsFailed(err.to_string()));
+                    tx.send(Message::PackVersionsFailed(err.to_string()));
                 }
             }
         });
@@ -899,7 +986,7 @@ impl McLiteApp {
 
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            let progress = Progress::new(GuiSink(Mutex::new(tx.clone())));
+            let progress = Progress::new(GuiSink::new(tx.clone()));
             let result = (|| -> Result<String, crate::Error> {
                 progress.phase("Leyendo el pack");
                 let dest = paths
@@ -945,11 +1032,11 @@ impl McLiteApp {
             match result {
                 Ok(slug) => {
                     logging::info(&format!("modpack instalado en {slug}"));
-                    let _ = tx.send(Message::PackInstalled(slug));
+                    tx.send(Message::PackInstalled(slug));
                 }
                 Err(err) => {
                     logging::error(&format!("modpack fallido: {err}"));
-                    let _ = tx.send(Message::Failed(err.to_string()));
+                    tx.send(Message::Failed(err.to_string()));
                 }
             }
         });
@@ -1064,7 +1151,7 @@ impl McLiteApp {
 
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            let progress = Progress::new(GuiSink(Mutex::new(tx.clone())));
+            let progress = Progress::new(GuiSink::new(tx.clone()));
             let result = loaders::resolve(
                 &http,
                 &paths,
@@ -1104,11 +1191,11 @@ impl McLiteApp {
             match result {
                 Ok(version_id) => {
                     logging::info(&format!("instalación completada: {version_id}"));
-                    let _ = tx.send(Message::JobDone(format!("«{version_id}» listo")));
+                    tx.send(Message::JobDone(format!("«{version_id}» listo")));
                 }
                 Err(err) => {
                     logging::error(&format!("instalación fallida: {err}"));
-                    let _ = tx.send(Message::Failed(err.to_string()));
+                    tx.send(Message::Failed(err.to_string()));
                 }
             }
         });
@@ -1161,7 +1248,7 @@ impl McLiteApp {
 
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            let progress = Progress::new(GuiSink(Mutex::new(tx.clone())));
+            let progress = Progress::new(GuiSink::new(tx.clone()));
 
             // El log de la sesión de juego empieza ANTES de preparar: así un fallo
             // de preparación (red, Java, instaladores…) también queda registrado y
@@ -1178,16 +1265,16 @@ impl McLiteApp {
                 Err(err) => {
                     mirror.write_line(&format!("error al preparar: {err}"));
                     logging::error(&format!("fallo al preparar el lanzamiento: {err}"));
-                    let _ = tx.send(Message::Failed(err.to_string()));
+                    tx.send(Message::Failed(err.to_string()));
                     return;
                 }
             };
 
-            let _ = tx.send(Message::Progress(ProgressEvent::Phase(
+            tx.send(Message::Progress(ProgressEvent::Phase(
                 "Lanzando el juego".to_string(),
             )));
             let command_line = prepared.plan.display_string();
-            let _ = tx.send(Message::Log(format!("$ {command_line}")));
+            tx.send(Message::Log(format!("$ {command_line}")));
             mirror.write_line(&format!("$ {command_line}"));
             logging::info(&format!(
                 "lanzando {} con {}",
@@ -1201,7 +1288,7 @@ impl McLiteApp {
                 Err(err) => {
                     mirror.write_line(&format!("error al arrancar: {err}"));
                     logging::error(&format!("no pudo arrancar el juego: {err}"));
-                    let _ = tx.send(Message::Failed(err.to_string()));
+                    tx.send(Message::Failed(err.to_string()));
                     return;
                 }
             };
@@ -1217,7 +1304,7 @@ impl McLiteApp {
                 if tail.len() > 400 {
                     tail.remove(0);
                 }
-                let _ = tx.send(Message::Log(line));
+                tx.send(Message::Log(line));
             }
 
             let status = child.wait();
@@ -1232,8 +1319,8 @@ impl McLiteApp {
                 "el juego terminó: ok={} código={}",
                 result.ok, result.code
             ));
-            let _ = tx.send(Message::Played { slug });
-            let _ = tx.send(Message::GameExit(result));
+            tx.send(Message::Played { slug });
+            tx.send(Message::GameExit(result));
         });
     }
 
@@ -1245,7 +1332,7 @@ impl McLiteApp {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let found = java::detect_all();
-            let _ = tx.send(Message::Javas(found));
+            tx.send(Message::Javas(found));
         });
     }
 
@@ -1401,8 +1488,12 @@ impl eframe::App for McLiteApp {
 
         self.show_toasts(ctx);
 
-        // Los mensajes de los hilos necesitan repintados periódicos.
-        ctx.request_repaint_after(Duration::from_millis(120));
+        // Repintado por evento: los hilos despiertan la GUI al enviar (MsgTx).
+        // Solo mientras hay trabajo (ETA/velocidad cambian con el tiempo) o una
+        // transición en curso se necesita un pulso periódico; en reposo, 0 % CPU.
+        if self.job.is_some() || self.screen_fade < 1.0 || !self.toasts.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
     }
 }
 
