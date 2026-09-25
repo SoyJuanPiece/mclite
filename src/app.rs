@@ -536,7 +536,9 @@ impl McLiteApp {
     /// Añade una línea al log sin dejar crecer la lista sin límite.
     fn push_log(&mut self, line: String) {
         const MAX_LINES: usize = 400;
-        const MAX_CHARS: usize = 300;
+        // Una palabra larga sin espacios no parte: con mucho más que esto, el
+        // ScrollArea central se ensancha y se sale de la ventana.
+        const MAX_CHARS: usize = 120;
 
         let line = if line.chars().count() > MAX_CHARS {
             let cut: String = line.chars().take(MAX_CHARS).collect();

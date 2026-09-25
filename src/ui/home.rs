@@ -72,7 +72,7 @@ fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str, icon: Option<
                 });
             });
             ui.add_space(4.0);
-            ui.label(theme::muted(format!("Carpeta: {dir}")));
+            ui.label(theme::muted(format!("Carpeta: {}", short_path(dir))));
             ui.add_space(2.0);
         });
     // Línea de acento bajo el banner (recorre todo el ancho).
@@ -80,6 +80,35 @@ fn hero(ui: &mut Ui, name: &str, nick: &str, sub: &str, dir: &str, icon: Option<
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 3.0), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::same(2), theme::accent());
+}
+
+/// Ruta corta para mostrar: últimos 3 componentes con prefijo "…".
+fn short_path(dir: &str) -> String {
+    let parts: Vec<&str> = dir
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() > 3 {
+        format!("…\\{}", parts[parts.len() - 3..].join("\\"))
+    } else {
+        dir.to_string()
+    }
+}
+
+/// "2026-09-25T04:40:02Z" → "25/09/2026 04:40". Si no encaja el formato, tal cual.
+fn pretty_timestamp(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    if raw.len() >= 16 && bytes[4] == b'-' && bytes[7] == b'-' && bytes[10] == b'T' {
+        format!(
+            "{}/{}/{} {}",
+            &raw[8..10],
+            &raw[5..7],
+            &raw[0..4],
+            &raw[11..16]
+        )
+    } else {
+        raw.to_string()
+    }
 }
 
 fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
@@ -97,13 +126,16 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
 
     // ── Cabecera ─────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.label(theme::title("Jugar"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(theme::muted(format!(
-                "Última partida: {}",
-                instance.last_played.as_deref().unwrap_or("nunca")
-            )));
-        });
+        ui.label(theme::title("Jugar"));            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(theme::muted(format!(
+                    "Última partida: {}",
+                    instance
+                        .last_played
+                        .as_deref()
+                        .map(pretty_timestamp)
+                        .unwrap_or_else(|| "nunca".to_string())
+                )));
+            });
     });
     ui.add_space(4.0);
 
