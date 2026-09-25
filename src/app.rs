@@ -288,6 +288,8 @@ pub struct McLiteApp {
     pub update_url: Option<String>,
     /// (versión, url) del release disponible, para el botón Actualizar.
     pub update_available: Option<(String, String)>,
+    /// Sección abierta en Ajustes (acordeón: solo una a la vez).
+    pub settings_open: Option<&'static str>,
     /// Fingerprint de la skin aplicada (refrescar la preview en Ajustes).
     pub skin_fingerprint: String,
     /// Canal hacia la GUI; cada envío despierta el repintado.
@@ -525,6 +527,7 @@ impl McLiteApp {
             ui_ctx: None,
             update_url: None,
             update_available: None,
+            settings_open: None,
             skin_fingerprint: String::new(),
             tx,
             rx,

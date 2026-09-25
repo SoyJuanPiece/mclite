@@ -7,7 +7,7 @@ use egui::Ui;
 use crate::app::McLiteApp;
 use crate::LAUNCHER_VERSION;
 use crate::core::shell;
-use crate::ui::{theme, widgets};
+use crate::ui::theme;
 
 pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     // Datos precalculados para poder mutar `app` dentro de los closures.
@@ -28,7 +28,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
 
     let mut config_dirty = false;
     let mut detect = false;
-    let mut open: Option<PathBuf> = None;
+    let mut open_dir: Option<PathBuf> = None;
     let mut accent_change: Option<crate::ui::theme::Accent> = None;
     let mut start_update = false;
     let mut apply_premium = false;
@@ -41,10 +41,20 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.add_space(8.0);
             ui.label(theme::title("Ajustes"));
-            ui.add_space(10.0);
+            ui.add_space(2.0);
+            ui.label(theme::muted(
+                "Haz clic en una sección para abrirla. Solo hay una abierta a la vez.",
+            ));
+            ui.add_space(6.0);
 
             // ── Actualizaciones ────────────────────────────────────────────
-            card(ui, "ACTUALIZACIONES", |ui| {
+            let open = app.settings_open == Some("UPDATES");
+            let update_hint = app
+                .update_available
+                .as_ref()
+                .map(|(v, _)| format!("¡{v} disponible!"))
+                .unwrap_or_default();
+            let toggled = theme::section_toggle(ui, open, "ACTUALIZACIONES", &update_hint, |ui| {
                 let mut check = app.config.check_updates;
                 if ui
                     .checkbox(
@@ -88,8 +98,12 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     }
                 }
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("UPDATES") };
+            }
 
-            card(ui, "APARIENCIA", |ui| {
+            let open = app.settings_open == Some("APPEARANCE");
+            let toggled = theme::section_toggle(ui, open, "APARIENCIA", "", |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Color de acento:");
                     for accent in crate::ui::theme::ACCENTS {
@@ -116,9 +130,13 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     }
                 });
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("APPEARANCE") };
+            }
 
             // ── Cuenta ───────────────────────────────────────────────────────
-            card(ui, "CUENTA OFFLINE", |ui| {
+            let open = app.settings_open == Some("ACCOUNT");
+            let toggled = theme::section_toggle(ui, open, "CUENTA OFFLINE", "", |ui| {
                 let mut nick = app.config.username.clone().unwrap_or_default();
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut nick).hint_text("Player (3–16 caracteres)"),
@@ -173,9 +191,13 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     ));
                 });
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("ACCOUNT") };
+            }
 
             // ── Valores por defecto ──────────────────────────────────────────
-            card(ui, "POR DEFECTO", |ui| {
+            let open = app.settings_open == Some("DEFAULTS");
+            let toggled = theme::section_toggle(ui, open, "POR DEFECTO", "", |ui| {
                 ui.horizontal(|ui| {
                     ui.label("RAM");
                     if ui
@@ -215,9 +237,13 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     config_dirty = true;
                 }
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("DEFAULTS") };
+            }
 
             // ── Java ─────────────────────────────────────────────────────────
-            card(ui, "JAVA", |ui| {
+            let open = app.settings_open == Some("JAVA");
+            let toggled = theme::section_toggle(ui, open, "JAVA", "", |ui| {
                 let mut use_mojang = app.config.use_mojang_runtime;
                 if ui
                     .checkbox(
@@ -291,9 +317,13 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     config_dirty = true;
                 }
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("JAVA") };
+            }
 
             // ── Datos ────────────────────────────────────────────────────────
-            card(ui, "DATOS", |ui| {
+            let open = app.settings_open == Some("DATA");
+            let toggled = theme::section_toggle(ui, open, "DATOS", "", |ui| {
                 ui.label(theme::muted(format!(
                     "Carpeta: {}",
                     app.paths.root().display()
@@ -306,19 +336,22 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button("Abrir carpeta").clicked() {
-                        open = Some(app.paths.root().to_path_buf());
+                        open_dir = Some(app.paths.root().to_path_buf());
                     }
                     if ui.button("Abrir logs").clicked() {
-                        open = Some(app.paths.logs());
+                        open_dir = Some(app.paths.logs());
                     }
                     if ui.button("Abrir crashes").clicked() {
-                        open = Some(app.paths.logs().join("crash"));
+                        open_dir = Some(app.paths.logs().join("crash"));
                     }
                 });
                 ui.label(theme::muted(
                     "launcher.log = arranque del launcher · crash/ = salida de cada partida",
                 ));
             });
+            if toggled {
+                app.settings_open = if open { None } else { Some("DATA") };
+            }
 
             ui.add_space(16.0);
         });
@@ -365,22 +398,11 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         }
         app.notify("Skin quitada", crate::app::ToastKind::Ok);
     }
-    if let Some(dir) = open {
+    if let Some(dir) = open_dir {
         if let Err(err) = shell::open_in_explorer(&dir) {
             app.error = Some(err.to_string());
         }
     }
 }
 
-/// Tarjeta con rótulo para cada sección de Ajustes.
-fn card(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .fill(theme::CARD)
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            widgets::section(ui, title);
-            ui.add_space(4.0);
-            body(ui);
-        });
-    ui.add_space(8.0);
-}
+

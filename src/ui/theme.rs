@@ -429,6 +429,64 @@ pub fn card_section(ui: &mut egui::Ui, title_text: &str, body: impl FnOnce(&mut 
     ui.add_space(10.0);
 }
 
+/// Sección plegable tipo acordeón: la cabecera (siempre visible) abre o cierra
+/// el contenido con un clic. Devuelve el estado nuevo (true = abierta).
+pub fn section_toggle(
+    ui: &mut egui::Ui,
+    open: bool,
+    title_text: &str,
+    hint: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let mut new_open = open;
+    let header = egui::Frame::new()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .corner_radius(CornerRadius::same(RADIUS as u8))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let icon = if open { "-" } else { "+" };
+                ui.label(
+                    RichText::new(icon)
+                        .strong()
+                        .color(if open { TEXT } else { MUTED }),
+                );
+                ui.label(
+                    RichText::new(title_text)
+                        .small()
+                        .strong()
+                        .color(if open { TEXT } else { MUTED }),
+                );
+                if !hint.is_empty() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(hint).small().color(MUTED));
+                    });
+                }
+            });
+        });
+    if header
+        .response
+        .interact(egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+    {
+        new_open = !open;
+    }
+    ui.add_space(4.0);
+    if new_open {
+        egui::Frame::new()
+            .fill(CARD)
+            .stroke(Stroke::new(1.0_f32, BORDER))
+            .corner_radius(CornerRadius::same(RADIUS as u8))
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, body);
+        ui.add_space(6.0);
+    }
+    ui.add_space(2.0);
+    new_open
+}
+
 /// Fila de formulario: etiqueta a ancho fijo + control alineado a la derecha
 /// de la etiqueta. Da la verticalidad que los formularios sueltos no tienen.
 pub fn form_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
