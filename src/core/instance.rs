@@ -51,6 +51,37 @@ pub struct Instance {
     pub from_pack: Option<String>,
 }
 
+/// La edición (nombre/RAM/cargador) y la reparación mutan la instancia sin
+/// recrearla: el icono y el pack de origen tienen que sobrevivir siempre.
+#[test]
+fn editar_y_reparar_conservan_icono_y_pack_de_origen() {
+    let paths = crate::core::paths::Paths::with_root(std::env::temp_dir().join("mclite-icono"));
+    let _ = std::fs::remove_dir_all(paths.root());
+
+    let mut store = InstanceStore::default();
+    let mut instance = Instance::new("Zombie Invade", "1.20.1", LoaderKind::Forge);
+    instance.icon = Some("https://cdn.modrinth.com/icon.webp".into());
+    instance.from_pack = Some("Zombie Invade 100 Days".into());
+    let slug = store.add(instance, &paths).unwrap();
+    store.save(&paths).unwrap();
+
+    // Simula lo que hace save_edit: toca nombre/RAM/cargador, nada más.
+    let mut store = InstanceStore::load(&paths);
+    let editable = store.instances.iter_mut().find(|i| i.slug == slug).unwrap();
+    editable.name = "Otro nombre".into();
+    editable.ram_mb = 8192;
+    editable.mc_version = "1.20.2".into();
+    store.save(&paths).unwrap();
+
+    // Y la reparación no toca el índice: recargar es suficiente.
+    let store = InstanceStore::load(&paths);
+    let instance = store.find(&slug).unwrap();
+    assert_eq!(instance.icon.as_deref(), Some("https://cdn.modrinth.com/icon.webp"));
+    assert_eq!(instance.from_pack.as_deref(), Some("Zombie Invade 100 Days"));
+
+    let _ = std::fs::remove_dir_all(paths.root());
+}
+
 fn default_ram() -> u32 {
     DEFAULT_RAM_MB
 }
