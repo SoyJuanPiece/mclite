@@ -218,6 +218,9 @@ impl InstanceStore {
                 std::fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
             }
         }
+        // Persistir YA: si el launcher se cierra sin guardar, la instancia
+        // "reviviría" al arrancar porque instances.json seguiría con ella.
+        self.save(paths)?;
         Ok(Some(removed))
     }
 
