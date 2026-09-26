@@ -9,6 +9,18 @@ use crate::LAUNCHER_VERSION;
 use crate::core::shell;
 use crate::ui::theme;
 
+/// Segundos → texto compacto para el slider de rollback ("0", "1 d", "90 d").
+fn format_secs(secs: u64) -> String {
+    const DAY: u64 = 86_400;
+    if secs == 0 {
+        "borrar ya".to_string()
+    } else if secs < DAY {
+        format!("{} h", (secs + 3599) / 3600)
+    } else {
+        format!("{} d", (secs + DAY - 1) / DAY)
+    }
+}
+
 pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     // Datos precalculados para poder mutar `app` dentro de los closures.
     let javas: Vec<(PathBuf, u32, String, String)> = app
@@ -100,6 +112,26 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         )));
                     }
                 }
+                ui.add_space(6.0);
+                // Ventana de rollback: cuánto tiempo sobrevive el exe viejo.
+                ui.horizontal(|ui| {
+                    ui.label("Guardar el exe viejo:");
+                    let mut keep = app.config.keep_old_secs;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut keep, 0..=7_776_000_u64)
+                                .logarithmic(true)
+                                .custom_formatter(|n, _| format_secs(n as u64)),
+                        )
+                        .changed()
+                    {
+                        app.config.keep_old_secs = keep;
+                        config_dirty = true;
+                    }
+                });
+                ui.label(theme::muted(
+                    "Si una actualización fallara, renombra ese .old a .exe para volver. 0 = borrar al reiniciar.",
+                ));
             });
             if toggled {
                 app.settings_open = if open { None } else { Some("UPDATES") };

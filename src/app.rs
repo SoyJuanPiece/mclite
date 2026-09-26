@@ -670,6 +670,7 @@ impl McLiteApp {
         };
         // El manifiesto baja en un hilo: su MsgTx ya despierta la GUI al llegar.
         app.load_manifest();
+        updater::cleanup_old(app.config.keep_old_secs);
         app.check_for_update();
         app
     }

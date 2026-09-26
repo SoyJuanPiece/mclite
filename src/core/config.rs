@@ -27,6 +27,10 @@ pub struct LauncherConfig {
     /// `None` = la UI de MSA no se muestra. Ver docs/MICROSOFT-ACCOUNT.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub msa_client_id: Option<String>,
+    /// Cuántos segundos conservar `mclite.exe.old` tras actualizar (ventana de
+    /// rollback). 0 = borrar en el arranque siguiente. Siempre hay solo UNA copia.
+    #[serde(default)]
+    pub keep_old_secs: u64,
     #[serde(default = "default_ram")]
     pub ram_mb: u32,
     /// Toggle de snapshots. Apagado por defecto.
@@ -93,6 +97,7 @@ impl Default for LauncherConfig {
         Self {
             username: None,
             msa_client_id: None,
+            keep_old_secs: 0,
             ram_mb: DEFAULT_RAM_MB,
             show_snapshots: false,
             show_old_versions: false,

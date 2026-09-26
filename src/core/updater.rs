@@ -195,10 +195,34 @@ pub fn apply_swap(new_exe: &std::path::Path) -> Result<SwapOutcome> {
 
 /// Limpieza al arrancar: si quedó un `.old` de una actualización previa y ya
 /// no está bloqueado, fuera. Nunca es fatal.
-pub fn cleanup_old() {
+/// ¿Toca borrar la copia vieja? Sin fecha legible → sí (limpieza garantizada);
+/// con fecha, solo cuando supera la ventana de rollback configurada
+/// (`keep_secs` = 0 → borrar en el siguiente arranque).
+fn should_delete_old(age_secs: Option<u64>, keep_secs: u64) -> bool {
+    match age_secs {
+        None => true,
+        Some(age) => age >= keep_secs,
+    }
+}
+
+/// Limpia restos de actualizaciones en la carpeta del exe. Solo se conserva
+/// UNA copia (`mclite.exe.old`) y se borra cuando su antigüedad supera la
+/// ventana de rollback configurada (`keep_secs`; 0 = al siguiente arranque).
+pub fn cleanup_old(keep_secs: u64) {
     if let Ok(current) = std::env::current_exe() {
         if let Some(exe_dir) = current.parent() {
-            let _ = std::fs::remove_file(exe_dir.join("mclite.exe.old"));
+            let old = exe_dir.join("mclite.exe.old");
+            if old.exists() {
+                let age = std::fs::metadata(&old)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|mtime| mtime.elapsed().ok())
+                    .map(|elapsed| elapsed.as_secs());
+                if should_delete_old(age, keep_secs) {
+                    let _ = std::fs::remove_file(&old);
+                }
+            }
+            // El helper del .bat sí siempre se puede borrar: ya no sirve.
             let _ = std::fs::remove_file(exe_dir.join("mclite-update.bat"));
         }
     }
@@ -207,6 +231,17 @@ pub fn cleanup_old() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn la_ventana_de_rollback_decide_el_borrado() {
+        // Sin fecha legible: siempre se limpia.
+        assert!(should_delete_old(None, 3600));
+        // Ventana 0: borrar en cuanto se detecte.
+        assert!(should_delete_old(Some(0), 0));
+        assert!(should_delete_old(Some(3600), 3600));
+        // Dentro de la ventana: se conserva para rollback.
+        assert!(!should_delete_old(Some(100), 3600));
+    }
 
     #[test]
     fn compara_versiones() {
