@@ -145,18 +145,32 @@ pub fn download_update(
     Ok(new_exe)
 }
 
-/// Resultado del armado del cambio de versión (el swap lo completa el helper).
+/// Añade una línea al `mclite-update.log` junto al exe (best-effort).
+fn update_log(exe_dir: &std::path::Path, line: &str) {
+    use std::io::Write;
+    let path = exe_dir.join("mclite-update.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
 
-/// Intercambia el exe en ejecución por el nuevo (ya verificado).
-/// Solo toca el exe si el rename del actual tuvo éxito.
-/// Prepara el cambio de versión. SIEMPRE vía helper (.bat): el launcher arma
-/// el script, sale, y el helper espera su cierre, instala el exe nuevo y
-/// REINICIA McLite. Así el cierre+apertura está garantizado aunque el
-/// antivirus sujete el fichero en ejecución (el copy se hace con el proceso
-/// ya muerto, no desde dentro).
+/// Intercambia el exe en ejecución por el nuevo. SIN bucles ni
+/// `tasklist | find` en batch (ese patrón se colgaba: el .bat quedaba vivo
+/// sin copiar nada). Todo el trabajo pesado ocurre aquí, en Rust:
 ///
-/// Deja además `mclite.exe.old` (copia del exe vivo) como rollback; su
-/// limpieza respeta la ventana configurada (`cleanup_old`).
+/// 1. Renombra el exe vivo → `mclite.exe.old` (permitido en ejecución en
+///    Windows; queda como rollback). El proceso sigue corriendo desde la
+///    imagen renombrada.
+/// 2. Copia el exe nuevo al hueco y VERIFICA el tamaño (3 intentos).
+/// 3. Escribe un helper mínimo de 3 líneas —espera 2 s, `start`, se borra—
+///    SOLO para reabrir tras el cierre; sin PID, sin delayed expansion.
+///
+/// Si el rename fallara (antivirus agresivo), el helper de respaldo copia
+/// tras 3 s de gracia (proceso ya muerto) y luego abre.
 pub fn apply_swap(new_exe: &std::path::Path) -> Result<()> {
     use std::process::Command;
 
@@ -168,28 +182,73 @@ pub fn apply_swap(new_exe: &std::path::Path) -> Result<()> {
             "el exe está en la raíz del sistema de archivos".into(),
         ));
     };
-    let old = exe_dir.join("mclite.exe.old");
-
-    // Copia de rollback del exe actual (renombrar en ejecución falla con AV).
-    let _ = std::fs::remove_file(&old);
-    let _ = std::fs::copy(&current, &old);
-
-    // Helper: espera el cierre (por PID: inmune a exe renombrado) → copia con
-    // VERIFICACIÓN de tamaño y 6 reintentos (el antivirus suele sujetar el .new
-    // recién descargado) → arranca la versión nueva → deja log → se borra.
-    // Si la copia fallara, NO borra el .new: el próximo arranque re-ofrece la
-    // actualización y se reintenta.
-    let helper = exe_dir.join("mclite-update.bat");
-    let log = exe_dir.join("mclite-update.log");
-    let pid = std::process::id();
-    let script = format!(
-        "@echo off\r\nsetlocal enabledelayedexpansion\r\n> \"{log}\" echo helper iniciado (pid {pid})\r\nset /a waits=0\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul\r\nif not errorlevel 1 (\r\n  set /a waits+=1\r\n  if !waits! GEQ 30 goto proceed\r\n  ping -n 2 127.0.0.1 >nul\r\n  goto wait\r\n)\r\n:proceed\r\n>> \"{log}\" echo lanzador cerrado tras !waits! esperas\r\nif not exist \"{new_exe}\" (\r\n  >> \"{log}\" echo ERROR: no hay exe nuevo en la carpeta update/\r\n  goto done\r\n)\r\nset /a tries=0\r\n:retry\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul 2>&1\r\nset /a tries+=1\r\nset sznew=0\r\nset szcur=0\r\nfor %%A in (\"{new_exe}\") do set sznew=%%~zA\r\nfor %%B in (\"{current}\") do set szcur=%%~zB\r\n>> \"{log}\" echo intento !tries!: nuevo=!sznew! copiado=!szcur!\r\nif not !szcur! equ !sznew! (\r\n  if !tries! LSS 6 (\r\n    ping -n 3 127.0.0.1 >nul\r\n    goto retry\r\n  )\r\n)\r\nif !szcur! equ !sznew! (\r\n  if exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\n  >> \"{log}\" echo copia verificada: instalada\r\n) else (\r\n  >> \"{log}\" echo ERROR: la copia fallo tras !tries! intentos; se conserva el .new\r\n)\r\nstart \"\" \"{current}\"\r\n:done\r\nendlocal\r\ndel /F /Q \"%~f0\"\r\n",
-        pid = pid,
-        new_exe = new_exe.display(),
-        current = current.display(),
-        log = log.display(),
+    let _ = std::fs::write(
+        exe_dir.join("mclite-update.log"),
+        "── actualización McLite ──\r\n",
     );
+    update_log(exe_dir, &format!("exe actual: {}", current.display()));
+
+    // 1) Rollback: renombrar el exe vivo. Si funciona, el hueco queda libre.
+    let old = exe_dir.join("mclite.exe.old");
+    let _ = std::fs::remove_file(&old);
+    let renamed = std::fs::rename(&current, &old);
+    match &renamed {
+        Ok(()) => update_log(exe_dir, "paso 1: exe viejo renombrado a .old (rollback listo)"),
+        Err(err) => update_log(
+            exe_dir,
+            &format!("paso 1: rename falló ({err}); el helper copiará tras el cierre"),
+        ),
+    }
+
+    let helper = exe_dir.join("mclite-update.bat");
+    let script = if renamed.is_ok() {
+        // 2) Copiar y verificar AQUÍ, en Rust: tamaño exacto, 3 intentos.
+        let expected = std::fs::metadata(new_exe).map(|meta| meta.len()).unwrap_or(0);
+        let mut installed = false;
+        for attempt in 1..=3 {
+            match std::fs::copy(new_exe, &current) {
+                Ok(len) if len == expected => {
+                    installed = true;
+                    update_log(
+                        exe_dir,
+                        &format!(
+                            "paso 2: exe nuevo instalado y verificado (intento {attempt}, {len} bytes)"
+                        ),
+                    );
+                    break;
+                }
+                other => {
+                    update_log(
+                        exe_dir,
+                        &format!("paso 2: intento {attempt} falló ({other:?})"),
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+        if !installed {
+            update_log(exe_dir, "ERROR: no pude colocar el exe nuevo; se conserva el .new");
+            return Err(crate::Error::Unsupported(
+                "no pude colocar el exe nuevo (ver mclite-update.log)".into(),
+            ));
+        }
+        let _ = std::fs::remove_file(new_exe);
+        // 3) Solo reabrir: 2 s de gracia, start, autodestrucción. Nada más.
+        format!(
+            "@echo off\r\nping -n 3 127.0.0.1 >nul\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
+            current = current.display(),
+        )
+    } else {
+        // Respaldo: el helper copia tras 3 s (proceso ya muerto) y abre.
+        format!(
+            "@echo off\r\nping -n 4 127.0.0.1 >nul\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
+            new_exe = new_exe.display(),
+            current = current.display(),
+        )
+    };
+
     std::fs::write(&helper, script).map_err(|err| Error::io(&helper, err))?;
+    update_log(exe_dir, "paso 3: helper armado para reabrir tras el cierre");
     let mut command = Command::new("cmd");
     command.args(["/C", &helper.display().to_string()]);
     #[cfg(windows)]
