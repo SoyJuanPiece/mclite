@@ -50,12 +50,16 @@ const INCLUDE_DIRS: &[&str] = &[
 ];
 const INCLUDE_FILES: &[&str] = &["options.txt", "servers.dat", "servers.dat_old", "usercache.json"];
 
-/// Exporta la instancia a `dest.zip`. Sobreescribe si existe.
+/// Exporta la instancia a `dest.zip`. Crea la carpeta padre si no existe
+/// (`backups/` nace con el primer export). Sobreescribe si existe.
 pub fn export(
     game_dir: &Path,
     manifest: &BackupManifest,
     dest: &Path,
 ) -> Result<u64> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+    }
     let file = std::fs::File::create(dest).map_err(|e| Error::io(dest, e))?;
     let mut zip = zip::ZipWriter::new(file);
     let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
@@ -285,6 +289,24 @@ mod tests {
         );
         assert_eq!(std::fs::read(restored.join("mods/sodium.jar")).unwrap(), b"jar");
         assert_eq!(std::fs::read(restored.join("options.txt")).unwrap(), b"music=0");
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn exporta_crea_la_carpeta_padre_si_no_existe() {
+        // Regresión: el primer export fallaba con os error 3 si `backups/`
+        // todavía no existía (File::create no crea carpetas).
+        let base = temp_dir("mkdirs");
+        let game = base.join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("options.txt"), b"x").unwrap();
+
+        let zip_path = base.join("no-existe/backups/backup.zip");
+        assert!(!zip_path.parent().unwrap().exists());
+        let count = export(&game, &manifest(), &zip_path).unwrap();
+        assert!(count >= 1);
+        assert!(zip_path.is_file());
 
         std::fs::remove_dir_all(&base).unwrap();
     }
