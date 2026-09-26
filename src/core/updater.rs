@@ -139,18 +139,19 @@ pub fn download_update(
     Ok(new_exe)
 }
 
-/// Resultado del intercambio del binario.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwapOutcome {
-    /// Todo hecho: el exe actual ya es el nuevo (tras el reinicio).
-    Done,
-    /// El rename falló (antivirus): queda un .bat que completará al salir.
-    NeedsHelper,
-}
+/// Resultado del armado del cambio de versión (el swap lo completa el helper).
 
 /// Intercambia el exe en ejecución por el nuevo (ya verificado).
 /// Solo toca el exe si el rename del actual tuvo éxito.
-pub fn apply_swap(new_exe: &std::path::Path) -> Result<SwapOutcome> {
+/// Prepara el cambio de versión. SIEMPRE vía helper (.bat): el launcher arma
+/// el script, sale, y el helper espera su cierre, instala el exe nuevo y
+/// REINICIA McLite. Así el cierre+apertura está garantizado aunque el
+/// antivirus sujete el fichero en ejecución (el copy se hace con el proceso
+/// ya muerto, no desde dentro).
+///
+/// Deja además `mclite.exe.old` (copia del exe vivo) como rollback; su
+/// limpieza respeta la ventana configurada (`cleanup_old`).
+pub fn apply_swap(new_exe: &std::path::Path) -> Result<()> {
     use std::process::Command;
 
     let current = std::env::current_exe().map_err(|err| {
@@ -163,34 +164,31 @@ pub fn apply_swap(new_exe: &std::path::Path) -> Result<SwapOutcome> {
     };
     let old = exe_dir.join("mclite.exe.old");
 
-    // Renombrar el vivo; permitido en ejecución (Windows), y aquí es la prueba
-    // de que podemos poner el nuevo en su sitio sin dejar el launcher roto.
+    // Copia de rollback del exe actual (renombrar en ejecución falla con AV).
     let _ = std::fs::remove_file(&old);
-    let renamed = std::fs::rename(&current, &old);
+    let _ = std::fs::copy(&current, &old);
 
-    if renamed.is_ok() {
-        std::fs::copy(new_exe, &current).map_err(|err| Error::io(&current, err))?;
-        Ok(SwapOutcome::Done)
-    } else {
-        // Antivirus u otra cosa sujeta el fichero: helper que completa al salir.
-        let helper = exe_dir.join("mclite-update.bat");
-        let script = format!(
-            "@echo off\r\n:wait\r\ntasklist /FI \"IMAGENAME eq mclite.exe\" | find /I \"mclite.exe\" >nul && (timeout /T 1 /NOBREAK >nul & goto wait)\r\nif exist \"{old}\" del /F /Q \"{old}\"\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nif exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
-            old = old.display(),
-            new_exe = new_exe.display(),
-            current = current.display(),
-        );
-        std::fs::write(&helper, script).map_err(|err| Error::io(&helper, err))?;
-        let mut command = Command::new("cmd");
-        command.args(["/C", &helper.display().to_string()]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0000_0008); // DETACHED_PROCESS
-        }
-        let _ = command.spawn();
-        Ok(SwapOutcome::NeedsHelper)
+    // Helper: espera el cierre → instala → arranca la versión nueva → se borra.
+    // (No borra el .old: de eso se encarga cleanup_old al arrancar, con su
+    // ventana de rollback configurada.)
+    let helper = exe_dir.join("mclite-update.bat");
+    let script = format!(
+        "@echo off\r\n:wait\r\ntasklist /FI \"IMAGENAME eq mclite.exe\" | find /I \"mclite.exe\" >nul && (timeout /T 1 /NOBREAK >nul & goto wait)\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nif exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
+        new_exe = new_exe.display(),
+        current = current.display(),
+    );
+    std::fs::write(&helper, script).map_err(|err| Error::io(&helper, err))?;
+    let mut command = Command::new("cmd");
+    command.args(["/C", &helper.display().to_string()]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0000_0008); // DETACHED_PROCESS
     }
+    command
+        .spawn()
+        .map_err(|err| Error::Launch(format!("no pude armar el helper de actualización: {err}")))?;
+    Ok(())
 }
 
 /// Limpieza al arrancar: si quedó un `.old` de una actualización previa y ya

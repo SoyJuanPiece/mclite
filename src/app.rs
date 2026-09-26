@@ -652,7 +652,7 @@ impl McLiteApp {
         std::thread::spawn(move || {
             let http = HttpClient::new();
             let progress = Progress::new(GuiSink::new(tx.clone()));
-            let result = (|| -> Result<updater::SwapOutcome, crate::Error> {
+            let result = (|| -> Result<(), crate::Error> {
                 progress.phase("Consultando el release");
                 let Some(release) = updater::latest_release(&http) else {
                     return Err(crate::Error::Unsupported(
@@ -662,35 +662,18 @@ impl McLiteApp {
                 progress.phase("Descargando la versión nueva");
                 let new_exe = updater::download_update(&http, &paths, &release)?;
                 progress.phase("Colocando el exe nuevo");
-                match updater::apply_swap(&new_exe) {
-                    Ok(outcome @ (updater::SwapOutcome::Done | updater::SwapOutcome::NeedsHelper)) => {
-                        Ok(outcome)
-                    }
-                    Err(err) => Err(err),
-                }
+                updater::apply_swap(&new_exe)?;
+                Ok(())
             })();
             match result {
-                Ok(outcome) => {
-                    // Reinicio automático: relanzar el exe nuevo y cerrar este.
-                    // (Con rename ok, el exe nuevo ya está en su sitio y este
-                    // proceso corre desde el .old; con helper, el .bat espera
-                    // a que salgamos para completar el cambio.)
-                    let mut command = std::process::Command::new(std::env::current_exe().unwrap_or_default());
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::process::CommandExt;
-                        command.creation_flags(0x0000_0008); // DETACHED_PROCESS
-                    }
-                    let restarted = command.spawn().is_ok();
-                    logging::info(&format!(
-                        "actualización aplicada ({outcome:?}); reinicio: {restarted}"
-                    ));
+                Ok(()) => {
+                    // El helper (.bat) toma el control: espera el cierre de esta
+                    // ventana, instala el exe nuevo y ARRANCA McLite él mismo.
+                    // Aquí solo avisamos y salimos limpio.
+                    logging::info("actualización lista: cerrando para que el helper instale y reinicie");
                     tx.send(Message::UpdateReady);
-                    std::thread::sleep(std::time::Duration::from_millis(900));
-                    if restarted {
-                        std::process::exit(0);
-                    }
-                    // Sin reinicio: el launcher queda abierto con el aviso.
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    std::process::exit(0);
                 }
                 Err(err) => tx.send(Message::Failed(err.to_string())),
             }
