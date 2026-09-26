@@ -244,6 +244,42 @@ pub fn cleanup_old(keep_secs: u64) {
 mod tests {
     use super::*;
 
+    /// Test EN VIVO contra el release real de GitHub: valida el fix del falso
+    /// "hash mismatch". Envenena update/release.sha256 con un hash viejo y
+    /// comprueba que download_update lo refresca (antes el descargador se
+    /// saltaba el fichero existente y comparaba contra el hash de otra versión).
+    /// Ignorado por defecto (toca red); correr con: cargo test -- --ignored
+    #[test]
+    #[ignore = "toca red y baja ~10 MB: verificación manual del updater"]
+    fn download_update_refresca_el_hash_viejo() {
+        use crate::core::paths::Paths;
+        let http = HttpClient::new();
+        let paths = Paths::discover().expect("paths descubribles");
+        let release = latest_release(&http).expect("debe leer el último release");
+
+        // 1) Primera pasada: deja release.sha256 y mclite.exe.new reales.
+        let first = download_update(&http, &paths, &release).expect("primera descarga");
+        assert!(first.is_file());
+
+        // 2) Envenenar el hash guardado (simula el resto de una versión anterior).
+        let hash_file = update_dir(&paths).join("release.sha256");
+        std::fs::write(&hash_file, format!("{}  mclite.exe\n", "0".repeat(64)))
+            .expect("escribir hash envenenado");
+
+        // 3) Segunda pasada: SIN el fix fallaría aquí con "no coincide con su hash".
+        let second = download_update(&http, &paths, &release).expect("segunda descarga (hash refrescado)");
+        assert_eq!(first, second);
+        let expected = parse_sha256_file(
+            &std::fs::read_to_string(&hash_file).expect("leer el hash refrescado"),
+        )
+        .expect("hash refrescado válido");
+        assert_eq!(sha256_of(&second).expect("hash del exe"), expected);
+
+        // Limpieza del directorio de prueba.
+        let _ = std::fs::remove_file(&second);
+        let _ = std::fs::remove_file(&hash_file);
+    }
+
     #[test]
     fn la_ventana_de_rollback_decide_el_borrado() {
         // Sin fecha legible: siempre se limpia.
