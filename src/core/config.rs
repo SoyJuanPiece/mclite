@@ -23,6 +23,10 @@ pub struct LauncherConfig {
     /// Nick de la cuenta offline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Client ID de Azure para el login con cuenta Microsoft (device code).
+    /// `None` = la UI de MSA no se muestra. Ver docs/MICROSOFT-ACCOUNT.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msa_client_id: Option<String>,
     #[serde(default = "default_ram")]
     pub ram_mb: u32,
     /// Toggle de snapshots. Apagado por defecto.
@@ -88,6 +92,7 @@ impl Default for LauncherConfig {
     fn default() -> Self {
         Self {
             username: None,
+            msa_client_id: None,
             ram_mb: DEFAULT_RAM_MB,
             show_snapshots: false,
             show_old_versions: false,

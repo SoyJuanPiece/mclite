@@ -12,6 +12,7 @@ use crate::core::crash;
 use crate::core::updater;
 use crate::core::logging;
 use crate::core::modrinth;
+use crate::core::msa;
 
 use crate::core::config::LauncherConfig;
 use crate::core::http::{Download, HttpClient};
@@ -38,6 +39,13 @@ pub enum Screen {
     Settings,
 }
 
+/// Login MSA por device code en curso.
+pub struct MsaLogin {
+    pub user_code: String,
+    pub verify_url: String,
+    pub url_with_code: String,
+}
+
 /// Lo que los hilos de fondo le cuentan a la ventana.
 enum Message {
     Progress(ProgressEvent),
@@ -51,6 +59,10 @@ enum Message {
     Javas(Vec<JavaInstallation>),
     /// Versiones de MC que soporta el cargador del formulario (None = sin datos).
     SupportedMcs(Option<Vec<String>>),
+    /// Login Microsoft: el código está listo para mostrar.
+    MsaCode { code: crate::core::msa::DeviceCode },
+    /// Login Microsoft terminó (o falló).
+    MsaDone { result: Result<msa::StoredSession, String> },
     /// Resultados de búsqueda de modpacks en Modrinth.
     PackSearch(Vec<modrinth::PackHit>),
     PackSearchFailed(String),
@@ -301,6 +313,15 @@ pub struct McLiteApp {
     pub update_banner_dismissed: bool,
     /// Slug de la instancia con el juego corriendo ahora (para Home).
     pub playing: Option<String>,
+    /// Splash de arranque animado (logo + puntos; se apaga solo).
+    pub splash: bool,
+    splash_start: std::time::Instant,
+    /// Cuenta Microsoft activa (sesión persistente en msa-session.json).
+    pub msa_session: Option<msa::StoredSession>,
+    /// Login MSA en curso: código para microsoft.com/link + estado.
+    pub msa_login: Option<MsaLogin>,
+    /// Señal para cancelar el hilo de login en curso.
+    pub msa_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Sección abierta en Ajustes (acordeón: solo una a la vez).
     pub settings_open: Option<&'static str>,
     /// Sección abierta en formularios Nueva instancia / Editar (acordeón).
@@ -331,6 +352,70 @@ impl McLiteApp {
     /// pero conserva la puerta para futuros usos de repintado dirigido).
     pub fn set_ui_ctx(&mut self, ctx: egui::Context) {
         self.ui_ctx = Some(ctx);
+    }
+
+    /// Cancela el login de Microsoft en curso (el hilo sale en su próximo sondeo).
+    pub(crate) fn msa_cancel_login(&mut self) {
+        self.msa_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.msa_login = None;
+    }
+
+    /// Arranca el login con cuenta Microsoft (device code) en un hilo de fondo.
+    pub(crate) fn msa_begin_login(&mut self) {
+        if self.msa_login.is_some() {
+            return;
+        }
+        let Some(client_id) = self.config.msa_client_id.clone() else {
+            self.error = Some(
+                "Falta el Client ID de Azure: ver docs/MICROSOFT-ACCOUNT.md".to_string(),
+            );
+            return;
+        };
+        let tx = self.tx.clone();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.msa_cancel = cancel.clone();
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let device = match msa::begin_device_flow(&http, &client_id) {
+                Ok(device) => device,
+                Err(err) => {
+                    tx.send(Message::MsaDone {
+                        result: Err(err.to_string()),
+                    });
+                    return;
+                }
+            };
+            tx.send(Message::MsaCode { code: device.clone() });
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                match msa::poll_once(&http, &client_id, &device) {
+                    Ok(msa::PollOutcome::Pending) => continue,
+                    Ok(msa::PollOutcome::Done(account)) => {
+                        tx.send(Message::MsaDone {
+                            result: Ok(msa::StoredSession::from_account(&account)),
+                        });
+                        return;
+                    }
+                    Ok(msa::PollOutcome::Abandoned) => {
+                        tx.send(Message::MsaDone {
+                            result: Err("código caducado o acceso denegado".into()),
+                        });
+                        return;
+                    }
+                    Ok(msa::PollOutcome::Failed(msg)) => {
+                        tx.send(Message::MsaDone { result: Err(msg) });
+                        return;
+                    }
+                    Err(err) => {
+                        tx.send(Message::MsaDone { result: Err(err.to_string()) });
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// Comprueba en GitHub si hay release nueva (silencioso si falla o si el
@@ -486,6 +571,8 @@ impl McLiteApp {
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let paths = paths_probe;
+        // La sesión de Microsoft se lee antes de mover `paths` al struct.
+        let msa_session = msa::load_session(&paths);
         logging::init(&paths);
         logging::info("arranque del launcher");
         logging::info(&format!("carpeta de datos: {}", paths.root().display()));
@@ -544,6 +631,11 @@ impl McLiteApp {
             update_available: None,
             update_banner_dismissed: false,
             playing: None,
+            splash: true,
+            splash_start: std::time::Instant::now(),
+            msa_session,
+            msa_login: None,
+            msa_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             settings_open: None,
             form_open: None,
             skin_fingerprint: String::new(),
@@ -763,6 +855,29 @@ impl McLiteApp {
                     instance.playtime_secs = Some(instance.playtime_secs.unwrap_or(0) + secs);
                 }
                 let _ = self.store.save(&self.paths);
+            }
+            Message::MsaCode { code } => {
+                self.msa_login = Some(MsaLogin {
+                    user_code: code.user_code.clone(),
+                    verify_url: code.verify_url.clone(),
+                    url_with_code: code.url_with_code(),
+                });
+                self.status = format!("Código para Microsoft: {}", code.user_code);
+            }
+            Message::MsaDone { result } => {
+                self.msa_login = None;
+                match result {
+                    Ok(session) => {
+                        self.msa_session = Some(session);
+                        self.notify(
+                            format!("Sesión iniciada como {}", self.msa_session.as_ref().unwrap().username),
+                            ToastKind::Ok,
+                        );
+                    }
+                    Err(err) => {
+                        self.notify(format!("No se pudo iniciar sesión: {err}"), ToastKind::Error);
+                    }
+                }
             }
             Message::UpdateAvailable { version, url } => {
                 self.status = format!("McLite {version} disponible");
@@ -1178,6 +1293,7 @@ impl McLiteApp {
                     loader_version: index.loader_version(),
                     game_dir: game_dir.clone(),
                     username: config.username_or_default(),
+                    account: resolve_account(&config, &paths),
                     memory_mb: config.clamped_ram(),
                     width: 854,
                     height: 480,
@@ -1255,6 +1371,7 @@ impl McLiteApp {
                     loader_version: index.loader_version(),
                     game_dir: game_dir.clone(),
                     username: config.username_or_default(),
+                    account: resolve_account(&config, &paths),
                     memory_mb: config.clamped_ram(),
                     width: 854,
                     height: 480,
@@ -1453,6 +1570,11 @@ impl McLiteApp {
             loader_version: instance.loader_version.clone(),
             game_dir,
             username: self.config.username_or_default(),
+            account: {
+                let paths = &self.paths;
+                let config = &self.config;
+                resolve_account(config, paths)
+            },
             memory_mb: instance.ram_clamped(),
             width: instance.width,
             height: instance.height,
@@ -1646,6 +1768,44 @@ impl McLiteApp {
 }
 
 /// El slug de la instancia que se pidió lanzar (para marcar «última partida»).
+/// Credenciales para lanzar: cuenta Microsoft si hay sesión guardada (y
+/// Client ID), refrescándola si caducó; `None` = offline con el nick.
+/// También persiste la sesión renovada. Llamar ANTES de armar el PlayRequest.
+fn resolve_account(
+    config: &LauncherConfig,
+    paths: &Paths,
+) -> Option<crate::core::install::AccountCredentials> {
+    let client_id = config.msa_client_id.as_deref()?;
+    let session = msa::load_session(paths)?;
+    let http = HttpClient::new();
+    let account = if session.fresh() {
+        msa::MsaAccount {
+            username: session.username.clone(),
+            uuid: session.uuid.clone(),
+            mc_token: session.mc_token.clone(),
+            refresh_token: session.refresh_token,
+            expires_at: session.expires_at,
+        }
+    } else {
+        match msa::refresh(&http, client_id, &session.refresh_token) {
+            Ok(account) => account,
+            Err(err) => {
+                logging::warn(&format!(
+                    "no se pudo refrescar la sesión de Microsoft: {err}; se lanza offline"
+                ));
+                return None;
+            }
+        }
+    };
+    let stored = msa::StoredSession::from_account(&account);
+    let _ = msa::save_session(paths, &stored);
+    Some(crate::core::install::AccountCredentials {
+        username: account.username,
+        uuid: account.uuid,
+        access_token: account.mc_token,
+    })
+}
+
 fn request_slug(request: &PlayRequest) -> String {
     request
         .game_dir
@@ -1657,6 +1817,37 @@ fn request_slug(request: &PlayRequest) -> String {
 impl eframe::App for McLiteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
+
+        // Splash de arranque: logo + puntos que laten; dura ~1,4 s.
+        if self.splash {
+            let elapsed = self.splash_start.elapsed();
+            if elapsed.as_secs_f32() >= 1.4 {
+                self.splash = false;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(33));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space((ui.available_height() * 0.30).max(24.0));
+                        theme::grass_block(ui, 72.0);
+                        ui.add_space(10.0);
+                        ui.label(theme::title("McLite"));
+                        ui.add_space(18.0);
+                        ui.horizontal_centered(|ui| {
+                            let t = elapsed.as_secs_f32();
+                            for i in 0..3 {
+                                let phase = (t * 2.2 + i as f32 * 0.33) % 1.0;
+                                let alpha = (1.0 - phase).clamp(0.25, 1.0);
+                                let (rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(12.0, 8.0), egui::Sense::hover());
+                                ui.painter()
+                                    .circle_filled(rect.center(), 3.0, theme::accent().gamma_multiply(alpha));
+                            }
+                        });
+                    });
+                });
+                return;
+            }
+        }
 
         // Recordar la última instancia seleccionada (barato: solo al cambiar).
         if self.config.last_instance.as_deref() != self.selected.as_deref() {
@@ -1740,7 +1931,7 @@ impl eframe::App for McLiteApp {
         // Repintado por evento: los hilos despiertan la GUI al enviar (MsgTx).
         // Solo mientras hay trabajo (ETA/velocidad cambian con el tiempo) o una
         // transición en curso se necesita un pulso periódico; en reposo, 0 % CPU.
-        if self.job.is_some() || self.screen_fade < 1.0 || !self.toasts.is_empty() {
+        if self.job.is_some() || self.screen_fade < 1.0 || !self.toasts.is_empty() || self.msa_login.is_some() {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
     }

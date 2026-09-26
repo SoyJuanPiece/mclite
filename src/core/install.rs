@@ -341,6 +341,8 @@ pub struct PlayRequest {
     pub loader_version: Option<String>,
     pub game_dir: PathBuf,
     pub username: String,
+    /// Cuenta Microsoft ya resuelta (token fresco). `None` = offline.
+    pub account: Option<AccountCredentials>,
     pub memory_mb: u32,
     pub width: u32,
     pub height: u32,
@@ -411,6 +413,14 @@ pub struct Prepared {
     pub account: OfflineAccount,
 }
 
+/// Credenciales de una cuenta Microsoft resuelta (token ya vigente).
+#[derive(Debug, Clone)]
+pub struct AccountCredentials {
+    pub username: String,
+    pub uuid: String,
+    pub access_token: String,
+}
+
 /// Resuelve cargador + vanilla, descarga lo que falte y arma la línea de comandos.
 /// Es lo único que tienen que llamar la CLI y la GUI para lanzar.
 pub fn prepare(
@@ -420,7 +430,15 @@ pub fn prepare(
     opts: &InstallOptions,
     progress: &Progress,
 ) -> Result<Prepared> {
-    let account = OfflineAccount::new(&req.username)?;
+    // Cuenta Microsoft si el caller trajo credenciales; si no, offline.
+    let account = match &req.account {
+        Some(creds) => OfflineAccount {
+            username: creds.username.clone(),
+            uuid: creds.uuid.clone(),
+            access_token: creds.access_token.clone(),
+        },
+        None => OfflineAccount::new(&req.username)?,
+    };
 
     progress.phase("Resolviendo versión");
     let (version_id, version) = loaders::resolve(

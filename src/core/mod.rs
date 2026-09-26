@@ -20,6 +20,7 @@ pub mod libraries;
 pub mod logging;
 pub mod manifest;
 pub mod modrinth;
+pub mod msa;
 pub mod natives;
 pub mod paths;
 pub mod process;

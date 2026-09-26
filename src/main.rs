@@ -587,6 +587,8 @@ fn cmd_launch(cli: &Cli) -> mclite::Result<()> {
         loader_version,
         game_dir: game_dir.clone(),
         username,
+        // La CLI lanza offline (sin login Microsoft).
+        account: None,
         memory_mb: ram,
         width,
         height,

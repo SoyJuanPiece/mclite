@@ -44,6 +44,9 @@ pub enum Error {
 
     #[error("nick inválido: {0}")]
     InvalidUsername(String),
+
+    #[error("cuenta: {0}")]
+    Auth(String),
 }
 
 impl Error {

@@ -33,6 +33,9 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let mut start_update = false;
     let mut apply_premium = false;
     let mut remove_skin = false;
+    let mut start_msa = false;
+    let mut cancel_msa = false;
+    let mut logout_msa = false;
     let ctx = ui.ctx().clone();
 
     egui::ScrollArea::vertical()
@@ -193,6 +196,105 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             });
             if toggled {
                 app.settings_open = if open { None } else { Some("ACCOUNT") };
+            }
+
+            // ── Cuenta Microsoft (opcional: requiere Client ID) ─────
+            let open = app.settings_open == Some("MSA");
+            let msa_hint = match (&app.msa_session, &app.msa_login) {
+                (Some(session), _) => session.username.clone(),
+                (None, Some(login)) => format!("código {}", login.user_code),
+                (None, None) => "sin cuenta".to_string(),
+            };
+            let toggled = theme::section_toggle(ui, open, "CUENTA MICROSOFT", &msa_hint, |ui| {
+                match (&app.msa_session, &app.msa_login) {
+                    (Some(session), _) => {
+                        ui.label(egui::RichText::new(format!(
+                            "Sesión iniciada como {}",
+                            session.username
+                        )).strong());
+                        ui.label(theme::muted(format!(
+                            "UUID: {} — el juego usa tu skin y nombre reales",
+                            session.uuid
+                        )));
+                        ui.label(theme::muted(
+                            "El token se renueva solo al lanzar el juego.",
+                        ));
+                        if ui.button("Cerrar sesión de Microsoft").clicked() {
+                            logout_msa = true;
+                        }
+                    }
+                    (None, Some(login)) => {
+                        ui.label(theme::muted("1. Abre este enlace (clic para copiar):"));
+                        if ui.link(login.verify_url.clone()).clicked() {
+                            ui.ctx().copy_text(login.verify_url.clone());
+                        }
+                        ui.label(theme::muted("2. Escribe este código:"));
+                        ui.label(
+                            egui::RichText::new(&login.user_code)
+                                .strong()
+                                .size(22.0),
+                        );
+                        if ui.button("Copiar código").clicked() {
+                            ui.ctx().copy_text(login.user_code.clone());
+                        }
+                        if ui.button("Abrir el navegador").clicked() {
+                            let _ = crate::core::shell::open_url(&login.url_with_code);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(theme::muted("Esperando tu confirmación…"));
+                            if ui.button("Cancelar").clicked() {
+                                cancel_msa = true;
+                            }
+                        });
+                    }
+                    (None, None) => {
+                        if app.config.msa_client_id.is_some() {
+                            ui.label(theme::muted(
+                                "Inicia sesión para jugar con tu skin y nombre reales, y entrar a servidores con login. El login usa un código corto en el navegador.",
+                            ));
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("Iniciar sesión con Microsoft").family(theme::semibold()))
+                                        .fill(theme::accent()),
+                                )
+                                .clicked()
+                            {
+                                start_msa = true;
+                            }
+                        } else {
+                            ui.label(theme::muted(
+                                "Para usar tu cuenta de Minecraft necesitas un Client ID gratuito de Azure (5 minutos, solo la primera vez). Guía paso a paso:",
+                            ));
+                            ui.hyperlink_to(
+                                "docs/MICROSOFT-ACCOUNT.md (guía en el repo)",
+                                "https://github.com/SoyJuanPiece/mclite/blob/main/docs/MICROSOFT-ACCOUNT.md",
+                            );
+                            ui.add_space(4.0);
+                            ui.label("Client ID:");
+                            let mut client_id = app
+                                .config
+                                .msa_client_id
+                                .clone()
+                                .unwrap_or_default();
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut client_id)
+                                    .hint_text("00000000-0000-0000-0000-000000000000"),
+                            );
+                            if response.changed() {
+                                app.config.msa_client_id = if client_id.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(client_id.trim().to_string())
+                                };
+                                config_dirty = true;
+                            }
+                        }
+                    }
+                }
+            });
+            if toggled {
+                app.settings_open = if open { None } else { Some("MSA") };
             }
 
             // ── Valores por defecto ──────────────────────────────────────────
@@ -372,6 +474,17 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     }
     if start_update {
         app.start_update();
+    }
+    if start_msa {
+        app.msa_begin_login();
+    }
+    if cancel_msa {
+        app.msa_cancel_login();
+    }
+    if logout_msa {
+        crate::core::msa::clear_session(&app.paths);
+        app.msa_session = None;
+        app.notify("Sesión de Microsoft cerrada", crate::app::ToastKind::Ok);
     }
     if apply_premium {
         app.apply_premium_skin();

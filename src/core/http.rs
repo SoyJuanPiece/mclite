@@ -21,7 +21,8 @@ const MAX_THREADS: usize = 16;
 const ATTEMPTS: u32 = 3;
 
 pub struct HttpClient {
-    agent: ureq::Agent,
+    /// Expuesto a `crate` para flujos que necesitan POST (MSA/Xbox).
+    pub(crate) agent: ureq::Agent,
 }
 
 impl Default for HttpClient {
