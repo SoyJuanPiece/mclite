@@ -2,11 +2,16 @@
 //!
 //! `egui::Image::from_uri` delega en el loader HTTP de egui_extras y ahí se
 //! quedaba en triángulo rojo con los .webp de Modrinth. Este módulo baja el
-//! icono a la caché de disco (`icons::resolve`), lo decodifica con la crate
+//! icono a la caché de disco (`core::icons`), lo decodifica con la crate
 //! `image` (png/webp/jpg) y lo sirve como `TextureHandle` cacheada por URL.
+//!
+//! Clave: la clave de caché SIEMPRE es la URL original. Resolver antes de
+//! llamar aquí (file://…) rompía la correspondencia y los iconos quedaban en
+//! placeholder para siempre aunque la descarga llegara al disco (bug 0.9.0).
 
 use egui::TextureHandle;
 
+use crate::core::icons::cache_path;
 use crate::core::paths::Paths;
 
 /// Decodifica los bytes de un icono a RGBA (png, webp o jpg; adivina formato).
@@ -17,44 +22,63 @@ fn decode(bytes: &[u8]) -> Option<(Vec<u8>, usize, usize)> {
     Some((rgba.into_raw(), width, height))
 }
 
-/// Textura lista para `egui::Image::from_texture`. Sincrona: el caller la pide
-/// con el icono ya en caché (`icons::resolve` lo baja en background), y si
-/// aún no está pinta el placeholder.
+/// Textura lista para `egui::Image::from_texture`, a partir de la URL ORIGINAL
+/// del icono. Orden: textura en memoria → fichero en caché de disco → lanza
+/// la descarga (una sola vez por URL) y pinta placeholder hasta que caiga.
 pub fn texture_for_url(ui: &egui::Ui, paths: &Paths, url: &str) -> Option<TextureHandle> {
     if url.is_empty() {
         return None;
     }
-    let name = format!("icon:{}", crate::core::icons::cache_path(paths, url).display());
-    if let Some(handle) = ui
-        .ctx()
-        .data_mut(|data| data.get_temp::<TextureHandle>(egui::Id::new(name.clone())))
-    {
+    let id = egui::Id::new(format!("icon:{url}"));
+    if let Some(handle) = ui.ctx().data_mut(|data| data.get_temp::<TextureHandle>(id)) {
         return Some(handle);
     }
-    // Solo decodifica si el fichero ya está en caché (si no, resolve() lo baja
-    // en un hilo y en la próxima pasada aparecerá).
-    let bytes = std::fs::read(crate::core::icons::cache_path(paths, url)).ok()?;
-    let (pixels, width, height) = decode(&bytes)?;
-    let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels);
-    let handle = ui.ctx().load_texture(name.clone(), image, egui::TextureOptions::LINEAR);
-    ui.ctx().data_mut(|data| {
-        data.insert_temp(egui::Id::new(name), handle.clone());
-    });
-    Some(handle)
+    let path = cache_path(paths, url);
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Some((pixels, width, height)) = decode(&bytes) {
+            let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels);
+            let handle = ui.ctx().load_texture(format!("icon:{url}"), image, egui::TextureOptions::LINEAR);
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(format!("icon:{url}")), handle.clone()));
+            return Some(handle);
+        }
+    }
+    // No está en caché: baja en un hilo de fondo UNA vez (guardia en temp para
+    // no reventar a Modrinth con un spawn por frame) y la próxima pasada
+    // entrará por el fichero de arriba.
+    let guard = egui::Id::new(format!("icon-dl:{url}"));
+    let already = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<bool>(guard).unwrap_or(false));
+    if !already {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(guard, true));
+        let dest = path;
+        let url_owned = url.to_string();
+        std::thread::spawn(move || {
+            let http = crate::core::http::HttpClient::new();
+            let _ = http.download(&crate::core::http::Download::new(&url_owned, &dest));
+        });
+    }
+    None
 }
 
-/// Quita emojis y símbolos fuera de BMP que la fuente Inter no tiene (se ven
-/// como cuadritos □ en las descripciones de Modrinth).
+/// Quita emojis, símbolos de bloques y texto CJK que la fuente Inter no tiene
+/// (se ven como cuadritos □ en las descripciones de Modrinth; hay packs cuyo
+/// texto viene en chino/coreano/japonés o con arte ASCII de bloques).
 pub fn strip_emojis(text: &str) -> String {
     text.chars()
         .filter(|c| {
             let code = *c as u32;
-            !(code >= 0x1F000)                 // emojis y símbolos nuevos
+            !(code >= 0x1F000)                   // emojis y símbolos nuevos
                 && !(0x2600..=0x27BF).contains(&code) // misc symbols + dingbats
                 && !(0xFE00..=0xFE0F).contains(&code) // variation selectors
                 && !(0x1F1E6..=0x1F1FF).contains(&code) // banderas
-                && *c != '\u{200D}'             // zero-width joiner
-                && *c != '\u{FE0F}'
+                && !(0x2500..=0x25FF).contains(&code) // bloques/box-drawing (▃ █ ▶)
+                && !(0x2E80..=0x9FFF).contains(&code) // CJK: radicales, kana, chino
+                && !(0xAC00..=0xD7AF).contains(&code) // hangul (coreano)
+                && !(0xF900..=0xFAFF).contains(&code) // CJK compatibilidad
+                && !(0xFF00..=0xFFEF).contains(&code) // fullwidth/halfwidth (？！)
+                && *c != '\u{200D}'              // zero-width joiner
         })
         .collect()
 }
@@ -65,11 +89,21 @@ mod tests {
 
     #[test]
     fn quita_emojis_pero_deja_texto_normal() {
-        assert_eq!(strip_emojis("Hola ▃ 100 Days 🔥 mundo"), "Hola ▃ 100 Days  mundo");
+        assert_eq!(strip_emojis("Hola ▃ 100 Days 🔥 mundo"), "Hola  100 Days  mundo");
         assert_eq!(strip_emojis("Battle Armory ⚔️ TACZ"), "Battle Armory  TACZ");
         assert_eq!(strip_emojis("400+ mods"), "400+ mods");
         // Conserva acentos y caracteres latinos.
         assert_eq!(strip_emojis("configuración ✅ rápida"), "configuración  rápida");
+    }
+
+    #[test]
+    fn quita_cjk_y_fullwidth_que_inter_no_tiene() {
+        // Coreano + chino (packs cuyo texto no viene en latino).
+        assert_eq!(strip_emojis("좀비 아포칼립스 中文 texto").trim(), "texto");
+        // Signo de interrogación fullwidth (BattleArmory TACZ).
+        assert_eq!(strip_emojis("？BattleArmory"), "BattleArmory");
+        // El raya em — (0x2014) y el texto normal se conservan.
+        assert_eq!(strip_emojis("a — b"), "a — b");
     }
 
     #[test]

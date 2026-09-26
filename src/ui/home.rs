@@ -212,6 +212,7 @@ fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
 /// la carpeta vive en el tooltip para no ensuciar (ni desbordar) el layout.
 fn hero(
     ui: &mut Ui,
+    paths: &crate::core::paths::Paths,
     name: &str,
     nick: &str,
     sub: &str,
@@ -231,11 +232,22 @@ fn hero(
             ui.horizontal(|ui| {
                 if let Some(url) = icon {
                     // Instancia con icono (pack de Modrinth): miniatura del pack.
-                    ui.add(
-                        egui::Image::from_uri(url)
-                            .max_size(egui::vec2(46.0, 46.0))
-                            .corner_radius(CornerRadius::same(10)),
-                    );
+                    match super::icons::texture_for_url(ui, paths, url) {
+                        Some(texture) => {
+                            ui.add(
+                                egui::Image::from_texture((texture.id(), egui::vec2(46.0, 46.0)))
+                                    .corner_radius(CornerRadius::same(10)),
+                            );
+                        }
+                        None => {
+                            let (icon_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(46.0, 46.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter()
+                                .rect_filled(icon_rect, CornerRadius::same(10), theme::SIDEBAR);
+                        }
+                    }
                 } else {
                     theme::avatar(ui, nick, 46.0);
                 }
@@ -342,12 +354,9 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     }
     ui.add_space(4.0);
 
-    let icon_uri = instance
-        .icon
-        .as_deref()
-        .map(|url| crate::core::icons::resolve(&app.paths, url));
     hero(
         ui,
+        &app.paths,
         &instance.name,
         &nick,
         &format!(
@@ -358,7 +367,7 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             instance.height
         ),
         &instance.game_dir(&app.paths).display().to_string(),
-        icon_uri.as_deref(),
+        instance.icon.as_deref(),
         instance.loader,
         &instance.mc_version,
         instance.loader_version.as_deref(),

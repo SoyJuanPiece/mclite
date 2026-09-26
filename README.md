@@ -2,7 +2,7 @@
 
 **Launcher ligero de Minecraft para Windows.** Un solo `.exe` portable, sin instalador, sin .NET y sin Java preinstalado: lo baja solo cuando hace falta.
 
-![Versión](https://img.shields.io/badge/versi%C3%B3n-0.8.0-green) ![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
+![Versión](https://img.shields.io/badge/versi%C3%B3n-0.9.3-green) ![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
 
 ---
 

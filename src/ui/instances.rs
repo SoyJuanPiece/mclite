@@ -17,6 +17,7 @@ use crate::ui::{theme, widgets};
 /// círculo de color; `icon` una miniatura (URL, p. ej. pack de Modrinth).
 fn side_item(
     ui: &mut Ui,
+    paths: &crate::core::paths::Paths,
     selected: bool,
     title: &str,
     sub: Option<&str>,
@@ -55,11 +56,20 @@ fn side_item(
     row.horizontal_centered(|ui| {
         ui.add_space(12.0);
         if let Some(url) = icon {
-            ui.add(
-                egui::Image::from_uri(url)
-                    .max_size(Vec2::new(26.0, 26.0))
-                    .corner_radius(CornerRadius::same(6)),
-            );
+            match super::icons::texture_for_url(ui, paths, url) {
+                Some(texture) => {
+                    ui.add(
+                        egui::Image::from_texture((texture.id(), Vec2::new(26.0, 26.0)))
+                            .corner_radius(CornerRadius::same(6)),
+                    );
+                }
+                None => {
+                    let (icon_rect, _) =
+                        ui.allocate_exact_size(Vec2::new(26.0, 26.0), Sense::hover());
+                    ui.painter()
+                        .rect_filled(icon_rect, CornerRadius::same(6), theme::SIDEBAR);
+                }
+            }
             ui.add_space(8.0);
         } else if let Some(color) = dot {
             let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
@@ -106,11 +116,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         if !matches(&instance.name, &instance.mc_version) {
             continue;
         }
-        // El icono pasa por la caché de disco: 2ª sesión = instantáneo y offline.
-        let icon = instance
-            .icon
-            .as_deref()
-            .map(|url| crate::core::icons::resolve(&app.paths, url));
+        // La URL original: el cargador de UI resuelve caché y descarga.
+        let icon = instance.icon.clone();
         let row = InstanceRow {
             slug: instance.slug.clone(),
             name: instance.name.clone(),
@@ -170,13 +177,17 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.add_space(8.0);
 
             // ── Navegación ──────────────────────────────────────────────────
-            if side_item(ui, screen == Screen::Home, "▶  Jugar", None, None, None, theme::TEXT)
+            if side_item(
+                ui,
+                &app.paths,
+                screen == Screen::Home, "▶  Jugar", None, None, None, theme::TEXT)
                 .clicked()
             {
                 go_home = true;
             }
             if side_item(
                 ui,
+                &app.paths,
                 screen == Screen::Modpacks,
                 "■  Modpacks",
                 None,
@@ -190,6 +201,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             }
             if side_item(
                 ui,
+                &app.paths,
                 screen == Screen::Settings,
                 "⚙  Ajustes",
                 None,
@@ -246,7 +258,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         ui.add_space(2.0);
                     }
                     for row in &regular {
-                        handle_instance_row(ui, row, &mut picked, &mut play, &mut menu_for);
+                        handle_instance_row(ui, &app.paths, row, &mut picked, &mut play, &mut menu_for);
                     }
 
                     // Sección 2: modpacks instalados desde Modrinth.
@@ -256,7 +268,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         ui.add_space(2.0);
                     }
                     for row in &packs {
-                        handle_instance_row(ui, row, &mut picked, &mut play, &mut menu_for);
+                        handle_instance_row(ui, &app.paths, row, &mut picked, &mut play, &mut menu_for);
                     }
                 });
         });
@@ -350,6 +362,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
 /// contextual con clic derecho. Encapsulado porque se usa en ambas secciones.
 fn handle_instance_row(
     ui: &mut Ui,
+    paths: &crate::core::paths::Paths,
     row: &InstanceRow,
     picked: &mut Option<String>,
     play: &mut Option<String>,
@@ -357,6 +370,7 @@ fn handle_instance_row(
 ) {
     let response = side_item(
         ui,
+        paths,
         row.selected,
         &row.name,
         Some(&row.sub),

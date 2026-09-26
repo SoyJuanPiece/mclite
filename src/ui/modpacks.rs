@@ -36,11 +36,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 pack.downloads,
                 pack.versions.clone(),
                 pack.categories.clone(),
-                // Caché en disco: la lista abre instantánea la 2ª vez.
-                pack.icon_url
-                    .as_deref()
-                    .filter(|url| !url.is_empty())
-                    .map(|url| crate::core::icons::resolve(&app.paths, url)),
+                pack.icon_url.clone(), // URL original: texture_for_url resuelve y cachea
             )
         })
         .collect();
@@ -308,9 +304,7 @@ fn pack_header(
                 let icon_texture = detail
                     .icon_url
                     .as_deref()
-                    .filter(|url| !url.is_empty())
-                    .map(|url| crate::core::icons::resolve(&app.paths, url))
-                    .and_then(|url| super::icons::texture_for_url(ui, &app.paths, &url));
+                    .and_then(|url| super::icons::texture_for_url(ui, &app.paths, url));
                 match icon_texture {
                     Some(texture) => {
                         ui.add(
