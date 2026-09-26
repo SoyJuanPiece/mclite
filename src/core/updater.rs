@@ -168,14 +168,20 @@ pub fn apply_swap(new_exe: &std::path::Path) -> Result<()> {
     let _ = std::fs::remove_file(&old);
     let _ = std::fs::copy(&current, &old);
 
-    // Helper: espera el cierre → instala → arranca la versión nueva → se borra.
-    // (No borra el .old: de eso se encarga cleanup_old al arrancar, con su
-    // ventana de rollback configurada.)
+    // Helper: espera el cierre (por PID: inmune a exe renombrado) → copia con
+    // VERIFICACIÓN de tamaño y 6 reintentos (el antivirus suele sujetar el .new
+    // recién descargado) → arranca la versión nueva → deja log → se borra.
+    // Si la copia fallara, NO borra el .new: el próximo arranque re-ofrece la
+    // actualización y se reintenta.
     let helper = exe_dir.join("mclite-update.bat");
+    let log = exe_dir.join("mclite-update.log");
+    let pid = std::process::id();
     let script = format!(
-        "@echo off\r\n:wait\r\ntasklist /FI \"IMAGENAME eq mclite.exe\" | find /I \"mclite.exe\" >nul && (timeout /T 1 /NOBREAK >nul & goto wait)\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nif exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\nstart \"\" \"{current}\"\r\ndel /F /Q \"%~f0\"\r\n",
+        "@echo off\r\nsetlocal enabledelayedexpansion\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /T 1 /NOBREAK >nul & goto wait)\r\nset /a tries=0\r\n:retry\r\ncopy /Y \"{new_exe}\" \"{current}\" >nul\r\nset /a tries+=1\r\nset sznew=0\r\nset szcur=0\r\nfor %%A in (\"{new_exe}\") do set sznew=%%~zA\r\nfor %%B in (\"{current}\") do set szcur=%%~zB\r\nif not !szcur! equ !sznew! (\r\n  if !tries! LSS 6 (\r\n    timeout /T 2 /NOBREAK >nul\r\n    goto retry\r\n  )\r\n)\r\nif !szcur! equ !sznew! (\r\n  if exist \"{new_exe}\" del /F /Q \"{new_exe}\"\r\n)\r\n> \"{log}\" echo intentos=!tries! nuevo=!sznew! copiado=!szcur!\r\nstart \"\" \"{current}\"\r\nendlocal\r\ndel /F /Q \"%~f0\"\r\n",
+        pid = pid,
         new_exe = new_exe.display(),
         current = current.display(),
+        log = log.display(),
     );
     std::fs::write(&helper, script).map_err(|err| Error::io(&helper, err))?;
     let mut command = Command::new("cmd");
@@ -222,6 +228,8 @@ pub fn cleanup_old(keep_secs: u64) {
             }
             // El helper del .bat sí siempre se puede borrar: ya no sirve.
             let _ = std::fs::remove_file(exe_dir.join("mclite-update.bat"));
+            // Y el log del update anterior también.
+            let _ = std::fs::remove_file(exe_dir.join("mclite-update.log"));
         }
     }
 }
