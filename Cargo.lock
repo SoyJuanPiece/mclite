@@ -1331,6 +1331,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1563,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "mclite"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
  "dirs",

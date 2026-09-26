@@ -23,7 +23,8 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             (
                 pack.slug.clone(),
                 pack.title.clone(),
-                pack.description.clone(),
+                // Los emojis de Modrinth no están en Inter: se ven como cuadritos.
+                super::icons::strip_emojis(&pack.description).trim().to_string(),
                 pack.downloads,
                 pack.versions.clone(),
                 // Caché en disco: la rejilla abre instantánea la 2ª vez.
@@ -141,12 +142,15 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                             ui.set_min_width(230.0);
                             ui.set_max_width(230.0);
                             ui.vertical(|ui| {
-                                // Icono del pack (100×100). Mientras carga, cuadro vacío.
-                                match icon.as_deref() {
-                                    Some(url) => {
+                                // Icono del pack (100×100): decodificado local
+                                // (el loader HTTP de egui se ahogaba con .webp).
+                                match icon
+                                    .as_deref()
+                                    .and_then(|url| super::icons::texture_for_url(ui, &app.paths, url))
+                                {
+                                    Some(texture) => {
                                         ui.add(
-                                            egui::Image::from_uri(url)
-                                                .fit_to_exact_size(egui::vec2(100.0, 100.0))
+                                            egui::Image::from_texture((texture.id(), egui::vec2(100.0, 100.0)))
                                                 .corner_radius(8.0),
                                         );
                                     }
@@ -160,7 +164,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                                         ui.painter().text(
                                             rect.center(),
                                             egui::Align2::CENTER_CENTER,
-                                        "📦",
+                                        "■",
                                         egui::TextStyle::Heading.resolve(ui.style()),
                                         theme::MUTED,
                                     );
@@ -246,16 +250,16 @@ fn pack_header(
 ) {
     theme::card(ui, |ui| {
             ui.horizontal(|ui| {
-                let icon_uri = detail
+                let icon_texture = detail
                     .icon_url
                     .as_deref()
                     .filter(|url| !url.is_empty())
-                    .map(|url| crate::core::icons::resolve(paths, url));
-                match icon_uri.as_deref() {
-                    Some(url) => {
+                    .map(|url| crate::core::icons::resolve(paths, url))
+                    .and_then(|url| super::icons::texture_for_url(ui, paths, &url));
+                match icon_texture {
+                    Some(texture) => {
                         ui.add(
-                            egui::Image::from_uri(url)
-                                .fit_to_exact_size(egui::vec2(96.0, 96.0))
+                            egui::Image::from_texture((texture.id(), egui::vec2(96.0, 96.0)))
                                 .corner_radius(8.0),
                         );
                     }
@@ -266,7 +270,7 @@ fn pack_header(
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
-                            "📦",
+                            "■",
                             egui::TextStyle::Heading.resolve(ui.style()),
                             theme::MUTED,
                         );
@@ -282,7 +286,7 @@ fn pack_header(
                         detail.followers
                     )));
                     if !detail.description.is_empty() {
-                        ui.label(theme::muted(&detail.description));
+                        ui.label(theme::muted(super::icons::strip_emojis(&detail.description)));
                     }
                     ui.horizontal(|ui| {
                         for category in detail.categories.iter().take(5) {

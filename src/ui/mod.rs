@@ -5,6 +5,7 @@
 
 pub mod edit_instance;
 pub mod home;
+pub mod icons;
 pub mod instances;
 pub mod modpacks;
 pub mod new_instance;
