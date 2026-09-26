@@ -119,8 +119,97 @@ pub fn detail(http: &HttpClient, slug: &str) -> Result<PackDetail> {
         .map_err(|e| Error::Http(format!("detalle de {slug}: {e}")))
 }
 
-/// Busca modpacks por texto (vacío = populares).
-pub fn search(http: &HttpClient, query: &str, limit: usize) -> Result<Vec<PackHit>> {
+/// Tipos de proyecto que explora la pestaña Modrinth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectType {
+    Modpack,
+    Mod,
+    ResourcePack,
+    DataPack,
+    Shader,
+}
+
+impl ProjectType {
+    /// Valor del facet `project_type:` en la API.
+    pub fn facet(self) -> &'static str {
+        match self {
+            ProjectType::Modpack => "modpack",
+            ProjectType::Mod => "mod",
+            ProjectType::ResourcePack => "resourcepack",
+            ProjectType::DataPack => "datapack",
+            ProjectType::Shader => "shader",
+        }
+    }
+
+    /// Etiqueta para la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            ProjectType::Modpack => "MODPACKS",
+            ProjectType::Mod => "MODS",
+            ProjectType::ResourcePack => "RESOURCE PACKS",
+            ProjectType::DataPack => "DATAPACKS",
+            ProjectType::Shader => "SHADERS",
+        }
+    }
+
+    pub const ALL: [ProjectType; 5] = [
+        ProjectType::Modpack,
+        ProjectType::Mod,
+        ProjectType::ResourcePack,
+        ProjectType::DataPack,
+        ProjectType::Shader,
+    ];
+}
+
+/// Orden de resultados de la búsqueda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSort {
+    Relevance,
+    Downloads,
+    Follows,
+    Newest,
+    Updated,
+}
+
+impl SearchSort {
+    pub fn api(self) -> &'static str {
+        match self {
+            SearchSort::Relevance => "relevance",
+            SearchSort::Downloads => "downloads",
+            SearchSort::Follows => "follows",
+            SearchSort::Newest => "newest",
+            SearchSort::Updated => "updated",
+        }
+    }
+
+    pub const ALL: [SearchSort; 5] = [
+        SearchSort::Relevance,
+        SearchSort::Downloads,
+        SearchSort::Follows,
+        SearchSort::Newest,
+        SearchSort::Updated,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SearchSort::Relevance => "Relevancia",
+            SearchSort::Downloads => "Descargas",
+            SearchSort::Follows => "Favoritos",
+            SearchSort::Newest => "Nuevos",
+            SearchSort::Updated => "Actualizados",
+        }
+    }
+}
+
+/// Busca proyectos de Modrinth por texto, tipo, versión de MC y orden.
+pub fn search(
+    http: &HttpClient,
+    query: &str,
+    project_type: ProjectType,
+    mc_version: Option<&str>,
+    sort: SearchSort,
+    limit: usize,
+) -> Result<Vec<PackHit>> {
     #[derive(Deserialize)]
     struct SearchResponse {
         hits: Vec<PackHit>,
@@ -128,10 +217,20 @@ pub fn search(http: &HttpClient, query: &str, limit: usize) -> Result<Vec<PackHi
     // Facets: [[...]] es OR interno, [[..],[..]] es AND entre listas.
     // Los DOS van urlencoded: el JSON trae corchetes y comillas, que en una URI
     // sin codificar hacen que ureq rechace la petición (invalid uri character).
-    let facets = urlencode(&serde_json::json!([[ "project_type:modpack" ]]).to_string());
+    let mut facets_json = serde_json::json!([[format!("project_type:{}", project_type.facet())]]);
+    if let Some(mc) = mc_version {
+        if !mc.is_empty() {
+            facets_json
+                .as_array_mut()
+                .expect("facets es array")
+                .push(serde_json::json!([[format!("versions:{mc}")]]));
+        }
+    }
+    let facets = urlencode(&facets_json.to_string());
     let url = format!(
-        "{API}/v2/search?limit={limit}&query={query}&facets={facets}",
+        "{API}/v2/search?limit={limit}&query={query}&facets={facets}&index={sort}",
         query = urlencode(query),
+        sort = sort.api(),
     );
     let response: SearchResponse = http.get_json_ua(&url, USER_AGENT)?;
     Ok(response.hits)

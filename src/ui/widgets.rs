@@ -32,6 +32,31 @@ pub fn section(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).small().strong().color(theme::MUTED));
 }
 
+/// Píldora de pestaña (segmentado): seleccionada = acento, si no, tarjeta.
+/// Devuelve true solo en el frame del clic.
+pub fn segmented_pill(ui: &mut Ui, selected: bool, text: &str) -> bool {
+    let response = egui::Frame::new()
+        .fill(if selected { theme::accent() } else { theme::CARD })
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            if selected { theme::accent() } else { theme::BORDER },
+        ))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::symmetric(12, 5))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(text)
+                    .small()
+                    .strong()
+                    .family(theme::semibold())
+                    .color(if selected { egui::Color32::WHITE } else { theme::TEXT }),
+            );
+        })
+        .response
+        .interact(egui::Sense::click());
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
 /// Formatea un contador de descargas al estilo Modrinth: 1234 → "1,2 k".
 pub fn format_count(n: u64) -> String {
     if n >= 1_000_000 {

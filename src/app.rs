@@ -67,6 +67,8 @@ enum Message {
     BackupDone(String),
     /// Backup importado y registrado como instancia (slug).
     BackupImported(String),
+    /// Fichero suelto de Modrinth instalado (mod/resource/shader).
+    FileInstalled(String),
     /// Resultados de búsqueda de modpacks en Modrinth.
     PackSearch(Vec<modrinth::PackHit>),
     PackSearchFailed(String),
@@ -298,10 +300,19 @@ pub struct McLiteApp {
     rpc_started: Option<std::time::Instant>,
     /// Resultado de la última partida (causa del crash, log guardado…).
     pub last_game_exit: Option<crash::GameExit>,
-    // ── Modpacks (Modrinth) ────────────────────────────────────────────
+    // ── Modrinth (pestaña Modpacks) ──────────────────────────────────
     pub packs: Vec<modrinth::PackHit>,
     pub pack_search: String,
     pub packs_loading: bool,
+    /// Tipo de proyecto en exploration (modpacks, mods, resources…).
+    pub pack_type: modrinth::ProjectType,
+    /// Orden de resultados.
+    pub pack_sort: modrinth::SearchSort,
+    /// Filtro de versión de MC (vacío = todas).
+    pub pack_mc_filter: String,
+    /// Búsqueda ya completada (para evitar re-búsquedas al volver a la pestaña
+    /// con los mismos parámetros).
+    pub packs_searched: bool,
     pub pack_versions_slug: Option<String>,
     pub pack_versions: Vec<modrinth::PackVersion>,
     /// Instancia que se está editando (Screen::Edit).
@@ -811,6 +822,10 @@ impl McLiteApp {
             packs: Vec::new(),
             pack_search: String::new(),
             packs_loading: false,
+            pack_type: modrinth::ProjectType::Modpack,
+            pack_sort: modrinth::SearchSort::Relevance,
+            pack_mc_filter: String::new(),
+            packs_searched: false,
             pack_versions_slug: None,
             pack_versions: Vec::new(),
             editing_slug: None,
@@ -921,6 +936,7 @@ impl McLiteApp {
             }
             Message::PackSearch(hits) => {
                 self.packs_loading = false;
+                self.packs_searched = true;
                 self.packs = hits;
             }
             Message::PackSearchFailed(message) => {
@@ -1113,6 +1129,12 @@ impl McLiteApp {
                         self.notify(format!("No se pudo iniciar sesión: {err}"), ToastKind::Error);
                     }
                 }
+            }
+            Message::FileInstalled(title) => {
+                self.job = None;
+                self.notify(format!("{title}: instalado en la instancia"), ToastKind::Ok);
+                self.status = format!("{title} instalado");
+                self.refresh_instance_extras();
             }
             Message::BackupDone(dest) => {
                 self.job = None;
@@ -1432,10 +1454,20 @@ impl McLiteApp {
         }
         self.packs_loading = true;
         let query = self.pack_search.trim().to_string();
+        let project_type = self.pack_type;
+        let sort = self.pack_sort;
+        let mc = self.pack_mc_filter.trim().to_string();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let http = HttpClient::new();
-            match modrinth::search(&http, &query, 20) {
+            match modrinth::search(
+                &http,
+                &query,
+                project_type,
+                if mc.is_empty() { None } else { Some(&mc) },
+                sort,
+                20,
+            ) {
                 Ok(hits) => {
                     tx.send(Message::PackSearch(hits));
                 }
@@ -1486,6 +1518,68 @@ impl McLiteApp {
 
     /// Crea la instancia del pack y lanza la instalación completa: juego base
     /// (loader + MC del índice) → descarga del .mrpack → mods + overrides.
+    /// Instala un proyecto SUELTO de Modrinth (mod, resource pack, shader o
+    /// datapack): baja el fichero primario y lo coloca en la carpeta que toca
+    /// dentro de la instancia seleccionada (o del juego base si es datapack).
+    pub(crate) fn start_file_install(&mut self, hit: &modrinth::PackHit, version: &modrinth::PackVersion) {
+        if self.job.is_some() {
+            self.notify("Espera a que termine lo que está en curso", ToastKind::Error);
+            return;
+        }
+        let Some(file) = version
+            .files
+            .iter()
+            .find(|file| file.primary)
+            .or_else(|| version.files.first())
+        else {
+            self.error = Some(format!("«{}» no tiene fichero descargable", hit.title));
+            return;
+        };
+        let Some(slug) = self.selected.clone() else {
+            self.notify(
+                "Selecciona (o crea) una instancia primero",
+                ToastKind::Error,
+            );
+            return;
+        };
+        let Some(instance) = self.store.find(&slug).cloned() else {
+            return;
+        };
+        // Carpeta destino según el tipo de proyecto.
+        let subdir = match self.pack_type {
+            modrinth::ProjectType::Mod => "mods",
+            modrinth::ProjectType::ResourcePack => "resourcepacks",
+            modrinth::ProjectType::Shader => "shaderpacks",
+            modrinth::ProjectType::DataPack => "datapacks",
+            modrinth::ProjectType::Modpack => "mods", // no debería llegar
+        };
+        let dir = instance.game_dir(&self.paths).join(subdir);
+        let url = file.url.clone();
+        let filename = file.filename.clone();
+        let title = hit.title.clone();
+        let tx = self.tx.clone();
+        self.job = Some(Job {
+            label: format!("Descargando {title}"),
+            phase: "Descargando".into(),
+            total: file.size,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        self.error = None;
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let result = std::fs::create_dir_all(&dir)
+                .map_err(|e| crate::Error::io(&dir, e))
+                .and_then(|_| {
+                    http.download(&crate::core::http::Download::new(&url, dir.join(&filename)))
+                });
+            match result {
+                Ok(_) => tx.send(Message::FileInstalled(title)),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
+    }
+
     pub(crate) fn start_pack_install(&mut self, hit: &modrinth::PackHit, version: &modrinth::PackVersion) {
         if self.job.is_some() {
             return;
