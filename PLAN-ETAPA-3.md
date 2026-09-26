@@ -1,6 +1,6 @@
 # Plan Etapa 3 — Features post-0.4
 
-Estado: EN CURSO (Fase 1)
+Estado: COMPLETA (Fases 1-5 en v0.5.0 + v0.7.0)
 
 El usuario eligió las 6 features de la lista. Se organizan en 5 fases, cada una
 con release propio (así el auto-update se prueba en cada paso).
@@ -14,20 +14,24 @@ con release propio (así el auto-update se prueba en cada paso).
   arrancar el proceso y `PlaySession{slug, secs}` al salir; el handler suma y
   guarda el store. Home muestra "● En partida · N min" mientras corre.
 
-## Fase 2 — Gestor de mods
-- Vista en el detalle de instancia (solo Fabric/OptiFine/Forge/NeoForge):
-  lista `mods/*.jar`, activar/desactivar (renombrar a `.disabled`), borrar,
-  abrir carpeta. Sin descargas: eso ya lo hace Modrinth/drag&drop.
+## Fase 2 — Gestor de mods ✔ (v0.7.0)
+- `core/mods.rs`: lista `mods/*.jar` (+ `.disabled`), activar/desactivar
+  (rename), borrar, con saneo de rutas. UI en Home (sección MODS, solo con
+  cargador). Punto verde/gris = activo/apagado.
 
-## Fase 3 — Galería de screenshots
-- Pestaña o tarjeta en Home con `screenshots/*.png` de la instancia: miniaturas
-  con texturas egui, clic = ver grande, botones abrir carpeta / copiar.
+## Fase 3 — Galería de screenshots ✔ (v0.7.0)
+- `core/shots.rs`: lista PNG por fecha, decodifica RGBA. Sección CAPTURAS en
+  Home con miniaturas (texturas cacheadas por ruta), clic = visor grande con
+  borrar, botón abrir carpeta.
 
-## Fase 4 — Copias de seguridad
-- Exportar instancia → `.zip` (mundos, mods, options.txt, servers.dat) con
-  Job + barra de progreso. Importar → restaura como instancia nueva.
+## Fase 4 — Copias de seguridad ✔ (v0.7.0)
+- `core/backup.rs`: export/import zip con manifiesto (`mclite-backup.json`).
+  Incluye mundos (recursivo), mods (+.disabled), resourcepacks, shaders,
+  screenshots, config, options.txt, servers.dat. Export con Job; import por
+  drag&drop del .zip → instancia nueva + aviso de Reparar.
 
-## Fase 5 — Discord Rich Presence
-- `discord-rich-presence` (IPC local, sin clave API): estado "Jugando
-  Minecraft <versión> (<loader>)" + tiempo transcurrido. Toggle en Ajustes.
-  Feature opcional en Cargo.toml para no engordar el exe base.
+## Fase 5 — Discord Rich Presence ✔ (v0.7.0)
+- `core/rpc.rs`: IPC local de Discord (pipe nominal Windows / unix socket),
+  protocolo JSON con marco u32 LE, sin dependencias nuevas. Presencia al
+  arrancar la partida ("Minecraft <versión> · con McLite" + timestamp), clear
+  al salir. Toggle en Ajustes → Por defecto (on por defecto, no-op sin Discord).

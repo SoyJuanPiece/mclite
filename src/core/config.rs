@@ -31,6 +31,9 @@ pub struct LauncherConfig {
     /// rollback). 0 = borrar en el arranque siguiente. Siempre hay solo UNA copia.
     #[serde(default)]
     pub keep_old_secs: u64,
+    /// Discord Rich Presence activo (muestra el estado en el perfil mientras juegas).
+    #[serde(default)]
+    pub discord_rpc: bool,
     #[serde(default = "default_ram")]
     pub ram_mb: u32,
     /// Toggle de snapshots. Apagado por defecto.
@@ -98,6 +101,7 @@ impl Default for LauncherConfig {
             username: None,
             msa_client_id: None,
             keep_old_secs: 0,
+            discord_rpc: true,
             ram_mb: DEFAULT_RAM_MB,
             show_snapshots: false,
             show_old_versions: false,

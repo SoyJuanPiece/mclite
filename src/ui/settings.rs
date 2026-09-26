@@ -370,6 +370,22 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     app.config.show_old_versions = old;
                     config_dirty = true;
                 }
+                let mut rpc = app.config.discord_rpc;
+                if ui
+                    .checkbox(
+                        &mut rpc,
+                        "Mostrar en Discord qué estás jugando (Rich Presence)",
+                    )
+                    .changed()
+                {
+                    app.config.discord_rpc = rpc;
+                    config_dirty = true;
+                    if !rpc {
+                        if let Some(mut conn) = app.rpc.take() {
+                            let _ = conn.clear();
+                        }
+                    }
+                }
             });
             if toggled {
                 app.settings_open = if open { None } else { Some("DEFAULTS") };

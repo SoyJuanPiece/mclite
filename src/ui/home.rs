@@ -11,6 +11,44 @@ enum Action {
     Repair,
     Delete,
     SkinSupport,
+    Backup,
+}
+
+/// Qué hacer con un mod de la lista.
+#[derive(Clone, Copy)]
+enum ModAction {
+    Enable,
+    Disable,
+    Delete,
+}
+
+/// Miniatura de captura con caché por ruta (textura egui).
+fn load_shot_texture(ui: &Ui, shot: &crate::core::shots::Shot) -> egui::TextureHandle {
+    let key = shot.path.display().to_string();
+    let name = format!("shot:{key}");
+    if let Some(handle) = ui.ctx().data_mut(|data| {
+        data.get_temp::<egui::TextureHandle>(egui::Id::new(name.clone()))
+    }) {
+        return handle;
+    }
+    let handle = match crate::core::shots::decode_rgba(&shot.path) {
+        Ok((pixels, width, height)) => {
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [width as usize, height as usize],
+                &pixels,
+            );
+            ui.ctx()
+                .load_texture(name.clone(), image, egui::TextureOptions::NEAREST)
+        }
+        Err(_) => {
+            let image = egui::ColorImage::new([2, 2], vec![egui::Color32::DARK_RED; 4]);
+            ui.ctx().load_texture(name.clone(), image, egui::TextureOptions::NEAREST)
+        }
+    };
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::new(name), handle.clone());
+    });
+    handle
 }
 
 /// Banner de versión nueva en Home: botón directo de update + cerrar.
@@ -261,7 +299,17 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     let mut action: Option<Action> = None;
     let mut open_dir = false;
     let mut open_log: Option<std::path::PathBuf> = None;
+    let mut open_shots = false;
     let nick = app.config.username_or_default();
+
+    // Refrescar mods/capturas solo cuando cambia la instancia (o tras acciones).
+    if app.extras_for.as_deref() != Some(slug) {
+        app.refresh_instance_extras();
+    }
+    let mods_open = app.form_open == Some("MODS");
+    let shots_open = app.form_open == Some("SHOTS");
+    let backup_open = app.form_open == Some("BACKUP");
+    let mut mod_action: Option<(String, ModAction)> = None;
 
     // ── Cabecera ─────────────────────────────────────────────────────────────
     let jugando = app.playing.as_deref() == Some(slug);
@@ -392,6 +440,167 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         widgets::progress(ui, &job.label, &job.phase, job.done, job.total, eta);
     }
 
+    // ── Mods (Fase 2): solo con cargador que los usa ────────────────────────
+    let has_loader = !matches!(
+        instance.loader,
+        crate::loaders::LoaderKind::Vanilla | crate::loaders::LoaderKind::OptiFine
+    );
+    if has_loader {
+        let disabled_count = app.mods_cache.iter().filter(|m| !m.enabled).count();
+        let mods_hint = if app.mods_cache.is_empty() {
+            "sin mods".to_string()
+        } else {
+            format!(
+                "{} mods{}",
+                app.mods_cache.len(),
+                if disabled_count > 0 {
+                    format!(" · {disabled_count} apagados")
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let toggled = theme::section_toggle(ui, mods_open, "MODS", &mods_hint, |ui| {
+            ui.label(theme::muted(
+                "Desactivar = renombrar a .disabled (el juego lo ignora). También puedes arrastrar .jar aquí.",
+            ));
+            ui.add_space(4.0);
+            if app.mods_cache.is_empty() {
+                ui.label(theme::muted(
+                    "Nada todavía. Baja mods desde la pestaña Modpacks o arrastra un .jar.",
+                ));
+            }
+            for entry in &app.mods_cache {
+                let name = entry.display_name().to_string();
+                ui.horizontal(|ui| {
+                    let dot = if entry.enabled {
+                        theme::accent()
+                    } else {
+                        theme::MUTED
+                    };
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 3.0, dot);
+                    ui.label(RichText::new(&name).size(13.0));
+                    ui.label(
+                        RichText::new(format!("{:.1} MB", entry.size as f32 / 1_048_576.0))
+                            .small()
+                            .color(theme::MUTED),
+                    );
+                    if entry.enabled {
+                        if ui.small_button("Desactivar").clicked() {
+                            mod_action = Some((name.clone(), ModAction::Disable));
+                        }
+                    } else {
+                        if ui.small_button("Activar").clicked() {
+                            mod_action = Some((name.clone(), ModAction::Enable));
+                        }
+                    }
+                    if ui.small_button("Borrar").clicked() {
+                        mod_action = Some((name.clone(), ModAction::Delete));
+                    }
+                });
+            }
+        });
+        if toggled {
+            app.form_open = if mods_open { None } else { Some("MODS") };
+        }
+    }
+
+    // ── Capturas (Fase 3) ────────────────────────────────────────────────────
+    let shots_hint = if app.shots_cache.is_empty() {
+        "ninguna".to_string()
+    } else {
+        format!("{} capturas", app.shots_cache.len())
+    };
+    let toggled = theme::section_toggle(ui, shots_open, "CAPTURAS", &shots_hint, |ui| {
+        if app.shots_cache.is_empty() {
+            ui.label(theme::muted(
+                "Las fotos que tomes en el juego (F2) aparecerán aquí.",
+            ));
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                for (index, shot) in app.shots_cache.iter().enumerate() {
+                    // Miniatura: textura cacheada por ruta.
+                    let texture = load_shot_texture(ui, shot);
+                    let response = ui.add(
+                        egui::Image::new((texture.id(), egui::vec2(96.0, 54.0)))
+                            .corner_radius(CornerRadius::same(6)),
+                    );
+                    let response = response.interact(egui::Sense::click());
+                    if response.clicked() {
+                        app.shot_viewer = Some(index);
+                    }
+                    response.on_hover_text(&shot.file_name);
+                }
+            });
+            ui.horizontal(|ui| {
+                if theme::ghost_button(ui, "Abrir carpeta").clicked() {
+                    open_shots = true;
+                }
+            });
+        }
+    });
+    if toggled {
+        app.form_open = if shots_open { None } else { Some("SHOTS") };
+    }
+
+    // ── Backup (Fase 4) ──────────────────────────────────────────────────────
+    let toggled = theme::section_toggle(ui, backup_open, "COPIA DE SEGURIDAD", "", |ui| {
+        ui.label(theme::muted(
+            "Empaqueta mundos, mods y configuración en un .zip. Para importarlo, arrastra el zip a esta ventana.",
+        ));
+        ui.add_space(4.0);
+        if ui
+            .add_enabled(
+                app.job.is_none(),
+                egui::Button::new(
+                    RichText::new("Exportar copia (.zip)").family(theme::semibold()),
+                )
+                .fill(theme::accent()),
+            )
+            .clicked()
+        {
+            action = Some(Action::Backup);
+        }
+    });
+    if toggled {
+        app.form_open = if backup_open { None } else { Some("BACKUP") };
+    }
+
+    // ── Visor de captura (in-flow, grande) ───────────────────────────────────
+    if let Some(index) = app.shot_viewer {
+        if let Some(shot) = app.shots_cache.get(index).cloned() {
+            ui.add_space(6.0);
+            egui::Frame::new()
+                .fill(theme::CARD_ELEVATED)
+                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&shot.file_name).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Cerrar").clicked() {
+                                app.shot_viewer = None;
+                            }
+                            if ui.button(egui::RichText::new("Borrar").color(theme::DANGER)).clicked() {
+                                app.shot_delete(index);
+                            }
+                        });
+                    });
+                    let texture = load_shot_texture(ui, &shot);
+                    let available = ui.available_width();
+                    ui.add(
+                        egui::Image::new((texture.id(), texture.size_vec2()))
+                            .max_width(available)
+                            .corner_radius(CornerRadius::same(6)),
+                    );
+                });
+        } else {
+            app.shot_viewer = None;
+        }
+    }
+
     // ── Aviso de crash de la última partida ─────────────────────────────────
     if let Some(exit) = &app.last_game_exit {
         if !exit.ok {
@@ -448,6 +657,19 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             app.error = Some(err.to_string());
         }
     }
+    if open_shots {
+        let dir = instance.game_dir(&app.paths).join("screenshots");
+        if let Err(err) = crate::core::shell::open_in_explorer(&dir) {
+            app.error = Some(err.to_string());
+        }
+    }
+    if let Some((file_name, kind)) = mod_action {
+        match kind {
+            ModAction::Enable => app.mod_enable(&file_name),
+            ModAction::Disable => app.mod_disable(&file_name),
+            ModAction::Delete => app.mod_delete(&file_name),
+        }
+    }
     if let Some(path) = open_log {
         let dir = path
             .parent()
@@ -463,6 +685,7 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         Some(Action::Edit) => app.open_edit(slug),
         Some(Action::Repair) => app.start_repair(slug),
         Some(Action::SkinSupport) => app.install_skin_support(slug),
+        Some(Action::Backup) => app.start_backup_export(),
         Some(Action::Delete) => match app.store.remove(slug, true, &app.paths) {
             Ok(_) => {
                 app.status = format!("«{}» borrada", instance.name);

@@ -5,6 +5,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod crash;
 pub mod endpoints;
@@ -21,12 +22,15 @@ pub mod logging;
 pub mod manifest;
 pub mod modrinth;
 pub mod msa;
+pub mod mods;
 pub mod natives;
 pub mod paths;
 pub mod process;
 pub mod progress;
 pub mod rules;
+pub mod rpc;
 pub mod runtime;
+pub mod shots;
 pub mod skins;
 pub mod shell;
 pub mod sodium;

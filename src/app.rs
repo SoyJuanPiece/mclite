@@ -63,6 +63,10 @@ enum Message {
     MsaCode { code: crate::core::msa::DeviceCode },
     /// Login Microsoft terminó (o falló).
     MsaDone { result: Result<msa::StoredSession, String> },
+    /// Backup exportado (ruta del zip resultante).
+    BackupDone(String),
+    /// Backup importado y registrado como instancia (slug).
+    BackupImported(String),
     /// Resultados de búsqueda de modpacks en Modrinth.
     PackSearch(Vec<modrinth::PackHit>),
     PackSearchFailed(String),
@@ -281,6 +285,17 @@ pub struct McLiteApp {
     pub error: Option<String>,
     /// Borrado en dos pasos: el primer clic rellena esto.
     pub confirm_delete: Option<String>,
+    /// Mods de la instancia seleccionada (refrescado al entrar en la sección).
+    pub mods_cache: Vec<crate::core::mods::ModEntry>,
+    /// Slug al que pertenecen las cachés de mods/shots (evita re-lecturas).
+    pub extras_for: Option<String>,
+    /// Capturas de la instancia seleccionada (idem) y visor abierto (índice).
+    pub shots_cache: Vec<crate::core::shots::Shot>,
+    pub shots_texture: Option<(String, egui::TextureHandle)>,
+    pub shot_viewer: Option<usize>,
+    /// Conexión Discord activa + instante de la sesión en curso.
+    pub rpc: Option<crate::core::rpc::DiscordRpc>,
+    rpc_started: Option<std::time::Instant>,
     /// Resultado de la última partida (causa del crash, log guardado…).
     pub last_game_exit: Option<crash::GameExit>,
     // ── Modpacks (Modrinth) ────────────────────────────────────────────
@@ -359,6 +374,176 @@ impl McLiteApp {
         self.msa_cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.msa_login = None;
+    }
+
+    // ── Fase 2: mods ────────────────────────────────────────────────────────
+
+    /// Refresca la caché de mods y capturas de la instancia seleccionada.
+    pub(crate) fn refresh_instance_extras(&mut self) {
+        self.extras_for = self.selected.clone();
+        self.mods_cache = self
+            .selected
+            .as_deref()
+            .and_then(|slug| self.store.find(slug))
+            .map(|instance| {
+                crate::core::mods::list(&instance.game_dir(&self.paths)).unwrap_or_default()
+            })
+            .unwrap_or_default();
+        self.shots_cache = self
+            .selected
+            .as_deref()
+            .and_then(|slug| self.store.find(slug))
+            .map(|instance| {
+                crate::core::shots::list(&instance.game_dir(&self.paths)).unwrap_or_default()
+            })
+            .unwrap_or_default();
+    }
+
+    fn with_mod(
+        &mut self,
+        file_name: &str,
+        action: fn(&std::path::Path, &str) -> crate::Result<()>,
+        ok: &str,
+    ) {
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        let Some(instance) = self.store.find(&slug) else {
+            return;
+        };
+        let game_dir = instance.game_dir(&self.paths);
+        match action(&game_dir, file_name) {
+            Ok(()) => {
+                self.notify(ok, ToastKind::Ok);
+            }
+            Err(err) => self.error = Some(err.to_string()),
+        }
+        self.refresh_instance_extras();
+    }
+
+    pub(crate) fn mod_enable(&mut self, file_name: &str) {
+        self.with_mod(file_name, crate::core::mods::enable, "Mod activado");
+    }
+
+    pub(crate) fn mod_disable(&mut self, file_name: &str) {
+        self.with_mod(file_name, crate::core::mods::disable, "Mod desactivado");
+    }
+
+    pub(crate) fn mod_delete(&mut self, file_name: &str) {
+        self.with_mod(file_name, crate::core::mods::delete, "Mod borrado");
+    }
+
+    // ── Fase 3: capturas ───────────────────────────────────────────────────
+
+    pub(crate) fn shot_delete(&mut self, index: usize) {
+        if let Some(shot) = self.shots_cache.get(index) {
+            if let Err(err) = crate::core::shots::delete(&shot.path) {
+                self.error = Some(err.to_string());
+            }
+        }
+        self.shot_viewer = None;
+        self.shots_texture = None;
+        self.refresh_instance_extras();
+    }
+
+    // ── Fase 4: backups ────────────────────────────────────────────────────
+
+    /// Exporta la instancia seleccionada a un .zip junto al exe (Job con barra).
+    pub(crate) fn start_backup_export(&mut self) {
+        if self.job.is_some() {
+            self.notify("Espera a que termine lo que está en curso", ToastKind::Error);
+            return;
+        }
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        let Some(instance) = self.store.find(&slug).cloned() else {
+            return;
+        };
+        let file_name = crate::core::backup::suggested_file_name(&instance.name);
+        let dest = self
+            .paths
+            .root()
+            .join("backups")
+            .join(&file_name);
+        let manifest = crate::core::backup::BackupManifest {
+            format: 1,
+            name: instance.name.clone(),
+            mc_version: instance.mc_version.clone(),
+            loader: format!("{:?}", instance.loader).to_lowercase(),
+            loader_version: instance.loader_version.clone(),
+            created: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        };
+        let game_dir = instance.game_dir(&self.paths);
+        let tx = self.tx.clone();
+        self.job = Some(Job {
+            label: format!("Exportando {}", instance.name),
+            phase: "Empaquetando".into(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        std::thread::spawn(move || {
+            let result =
+                crate::core::backup::export(&game_dir, &manifest, &dest).map(|count| count);
+            match result {
+                Ok(_) => tx.send(Message::BackupDone(dest.display().to_string())),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
+    }
+
+    /// Importa un backup arrastrado: crea la instancia y extrae sus datos.
+    pub(crate) fn import_backup_from_file(&mut self, path: std::path::PathBuf) {
+        if self.job.is_some() {
+            self.notify("Espera a que termine lo que está en curso", ToastKind::Error);
+            return;
+        }
+        let info = match crate::core::backup::inspect(&path) {
+            Ok(info) => info,
+            Err(err) => {
+                self.error = Some(err.to_string());
+                return;
+            }
+        };
+        // Nombre único basado en el del backup.
+        let mut name = info.manifest.name.clone();
+        if self.store.instances.iter().any(|i| i.name == name) {
+            name = format!("{} (restaurada)", name);
+        }
+        let kind = crate::loaders::LoaderKind::parse(&info.manifest.loader)
+            .unwrap_or(crate::loaders::LoaderKind::Vanilla);
+        let mut instance = crate::core::instance::Instance::new(
+            &name,
+            &info.manifest.mc_version,
+            kind,
+        );
+        instance.loader_version = info.manifest.loader_version.clone();
+        let slug = match self.store.add(instance.clone(), &self.paths) {
+            Ok(slug) => slug,
+            Err(err) => {
+                self.error = Some(err.to_string());
+                return;
+            }
+        };
+        let game_dir = instance.game_dir(&self.paths);
+        let tx = self.tx.clone();
+        self.job = Some(Job {
+            label: format!("Restaurando {}", name),
+            phase: "Extrayendo".into(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        std::thread::spawn(move || {
+            match crate::core::backup::import(&path, &game_dir) {
+                Ok(_) => tx.send(Message::BackupImported(slug)),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
     }
 
     /// Arranca el login con cuenta Microsoft (device code) en un hilo de fondo.
@@ -657,6 +842,13 @@ impl McLiteApp {
             update_available: None,
             update_banner_dismissed: false,
             playing: None,
+            mods_cache: Vec::new(),
+            extras_for: None,
+            shots_cache: Vec::new(),
+            shots_texture: None,
+            shot_viewer: None,
+            rpc: None,
+            rpc_started: None,
             splash: true,
             splash_start: std::time::Instant::now(),
             msa_session,
@@ -840,6 +1032,11 @@ impl McLiteApp {
             Message::GameExit(result) => {
                 self.job = None;
                 self.playing = None;
+                // Limpiar la presencia de Discord (si hubo conexión).
+                if let Some(mut rpc) = self.rpc.take() {
+                    let _ = rpc.clear();
+                }
+                self.rpc_started = None;
                 if result.ok {
                     self.status = format!("El juego terminó con código {}", result.code);
                 } else {
@@ -870,7 +1067,35 @@ impl McLiteApp {
                 let _ = self.store.save(&self.paths);
             }
             Message::Playing { slug } => {
-                self.playing = Some(slug);
+                self.playing = Some(slug.clone());
+                // Discord RPC: presencia al arrancar la partida (silencioso si
+                // no hay Discord o falla el pipe).
+                if self.config.discord_rpc {
+                    let version = self
+                        .store
+                        .find(&slug)
+                        .map(|instance| instance.mc_version.clone())
+                        .unwrap_or_default();
+                    match crate::core::rpc::DiscordRpc::connect() {
+                        Ok(Some(mut rpc)) => {
+                            let started = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            let _ = rpc.set_activity(
+                                &format!("Minecraft {version}"),
+                                "con McLite",
+                                Some(started),
+                            );
+                            self.rpc = Some(rpc);
+                            self.rpc_started = Some(std::time::Instant::now());
+                        }
+                        Ok(None) => {} // Discord no corre: nada que hacer
+                        Err(err) => {
+                            logging::warn(&format!("Discord RPC: {err}"));
+                        }
+                    }
+                }
             }
             Message::PlaySession { slug, secs } => {
                 if let Some(instance) = self
@@ -905,6 +1130,23 @@ impl McLiteApp {
                         self.notify(format!("No se pudo iniciar sesión: {err}"), ToastKind::Error);
                     }
                 }
+            }
+            Message::BackupDone(dest) => {
+                self.job = None;
+                self.notify(
+                    format!("Copia lista: {dest}"),
+                    ToastKind::Ok,
+                );
+                self.status = format!("Backup exportado a {dest}");
+            }
+            Message::BackupImported(slug) => {
+                self.job = None;
+                let _ = self.store.save(&self.paths);
+                self.notify("Copia restaurada: dale Reparar para bajar el juego base", ToastKind::Ok);
+                self.status = "Backup restaurado".to_string();
+                self.selected = Some(slug);
+                self.screen = Screen::Home;
+                self.refresh_instance_extras();
             }
             Message::UpdateAvailable { version, url } => {
                 self.status = format!("McLite {version} disponible");
@@ -2002,6 +2244,7 @@ impl McLiteApp {
             match extension.as_str() {
                 "mrpack" => self.install_local_mrpack(path),
                 "jar" => self.install_local_jar(path),
+                "zip" => self.import_backup_from_file(path),
                 "png" => {
                     match crate::core::skins::from_local_png(&path) {
                         Ok(bytes) => self.apply_skin_bytes(bytes),
