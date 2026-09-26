@@ -47,19 +47,25 @@ fi
 # ── 3) Build Windows ─────────────────────────────────────────────────────────
 ./scripts/build-windows.sh
 
-# ── 4) El exe lleva la versión nueva embebida (comparación diferencial) ─────
+# ── 4) Versión embebida + el release anterior NO era la misma versión ───────
 if [[ -n "${LATEST:-}" ]]; then
-  TMP=$(mktemp -d)
-  gh release download "v$LATEST" -R "$REPO" -p 'mclite.exe' -O "$TMP/prev.exe" 2>/dev/null
-  PREV=$(grep -aoF "$VERSION" "$TMP/prev.exe" 2>/dev/null | wc -l | tr -d ' ')
-  NOW=$(grep -aoF "$VERSION" "$OUT" | wc -l | tr -d ' ')
-  rm -rf "$TMP"
-  if [[ "$NOW" -le "$PREV" ]]; then
+  # La fuente de verdad del release anterior es su Cargo.toml en GitHub
+  # (comparar ocurrencias en el exe viejo era frágil: dependía de strings ajenas).
+  PREV_VERSION=$(gh api "repos/$REPO/contents/Cargo.toml?ref=v$LATEST" --jq '.content' 2>/dev/null \
+    | base64 -d 2>/dev/null \
+    | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+  if [[ "${PREV_VERSION:-}" == "$VERSION" ]]; then
+    echo "ERROR: el release $LATEST ya publicó la versión $VERSION. Sube el bump." >&2
+    exit 1
+  fi
+  # `|| true` dentro: grep sale 1 sin coincidencias y pipefail mataría el script.
+  NOW=$( { grep -aoF "$VERSION" "$OUT" 2>/dev/null || true; } | wc -l | tr -d ' ')
+  if [[ "$NOW" -lt 1 ]]; then
     echo "ERROR: el exe compilado NO lleva la versión $VERSION embebida." >&2
     echo "  ¿Seguro que Cargo.toml se usó para este build? Abortando." >&2
     exit 1
   fi
-  echo "→ OK: exe lleva \"$VERSION\" embebida ($NOW ocurrencias vs $PREV del anterior)"
+  echo "→ OK: exe lleva \"$VERSION\" embebida ($NOW ocurrencias); anterior era ${PREV_VERSION:-desconocida}"
 fi
 
 # ── 5) Integridad local del par exe + sha256 ────────────────────────────────
@@ -91,7 +97,7 @@ gh release download "$TAG" -R "$REPO" -p 'mclite.exe' -p 'mclite.exe.sha256' -D 
   || { echo "ERROR: no pude re-descargar el release recién creado" >&2; exit 1; }
 ( cd "$VDIR" && sha256sum -c mclite.exe.sha256 --quiet ) \
   || { echo "ERROR: los assets publicados NO pasan la verificación" >&2; exit 1; }
-PUB=$(grep -aoF "$VERSION" "$VDIR/mclite.exe" | wc -l)
+PUB=$( { grep -aoF "$VERSION" "$VDIR/mclite.exe" 2>/dev/null || true; } | wc -l | tr -d ' ')
 [[ "$PUB" -gt 0 ]] || { echo "ERROR: el exe publicado no lleva $VERSION" >&2; exit 1; }
 cp "$VDIR/mclite.exe" "$STUDIO_EXE"
 rm -rf "$VDIR"
