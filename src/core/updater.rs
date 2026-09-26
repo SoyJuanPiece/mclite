@@ -122,6 +122,12 @@ pub fn download_update(
     let new_exe = dir.join("mclite.exe.new");
     let hash_file = dir.join("release.sha256");
 
+    // Limpiar restos de un intento anterior: el downloader se salta los
+    // destinos que ya existen, y un .sha256 viejo haría fallar la verificación
+    // del exe nuevo con un hash de otra versión (falso "hash mismatch").
+    let _ = std::fs::remove_file(&new_exe);
+    let _ = std::fs::remove_file(&hash_file);
+
     http.download(&Download::new(&release.sha256_url, &hash_file))?;
     let expected = parse_sha256_file(
         &std::fs::read_to_string(&hash_file).map_err(|err| Error::io(&hash_file, err))?,
