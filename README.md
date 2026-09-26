@@ -1,73 +1,91 @@
-# McLite
+# 🟩 McLite
 
-Launcher ligero de Minecraft para Windows. Un solo `.exe` portable, sin instalador, sin .NET y sin Java preinstalado: lo baja solo cuando hace falta.
+**Launcher ligero de Minecraft para Windows.** Un solo `.exe` portable, sin instalador, sin .NET y sin Java preinstalado: lo baja solo cuando hace falta.
 
-![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
+![Versión](https://img.shields.io/badge/versi%C3%B3n-0.7.3-green) ![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
 
-## Características
+---
 
-- **Un ejecutable portable**: descárgalo, ejecútalo. La configuración vive en una carpeta `mclite/` junto al exe (si la carpeta no es escribible, cae a `%APPDATA%\mclite`).
-- **6 cargadores**: Vanilla, Fabric, Quilt, Forge, NeoForge y OptiFine.
-- **Modpacks de Modrinth**: búsqueda con iconos, detalle e instalación de `.mrpack` (mods + overrides) en una instancia nueva.
-- **Java automático**: usa el Java del sistema si sirve; si no, baja el runtime oficial de Mojang (`java-runtime-*`) igual que el launcher oficial. No hay que instalar nada.
-- **Sodium a un clic** para instancias Fabric (y casilla al crear la instancia).
-- **Cuentas offline** con nick local (UUID offline estándar). Ideal para jugar en singleplayer y servidores con `online-mode=false`.
-- **Descargas verificadas**: SHA-1 en todo, descarga en paralelo con reintentos y progreso con velocidad y ETA.
-- **Diagnóstico**: log del launcher rotado, espejo del log del juego, crash reports guardados y clasificados por causa.
-- **Instancias editables**: nombre, RAM, resolución, versión de MC y cargador — guardar reinstala lo que falte.
-- UI oscura con tema verde Minecraft, esquinas suaves y badges por cargador.
+## ✨ Qué ofrece
 
-## Descarga
+| | |
+|---|---|
+| 🪟 **Portable de verdad** | Un ejecutable. La configuración vive en una carpeta `mclite/` junto al exe (o `%APPDATA%\mclite` si la carpeta no es escribible). |
+| 🧩 **6 cargadores** | Vanilla, Fabric, Quilt, Forge, NeoForge y OptiFine. |
+| 📦 **Modpacks de Modrinth** | Búsqueda con iconos, detalle e instalación de `.mrpack` en una instancia nueva. También arrastra un `.mrpack` a la ventana. |
+| ☕ **Java automático** | Usa el del sistema si sirve; si no, baja el runtime oficial de Mojang. Nada que instalar. |
+| ⚡ **Sodium a un clic** | Para instancias Fabric (y casilla al crear). |
+| 👤 **Dos tipos de cuenta** | Offline con nick local, o **cuenta Microsoft real** por device code (nombre, UUID y skin de Mojang). |
+| 🛠️ **Gestor de mods** | Activa/desactiva/borra los `.jar` de una instancia sin abrir carpetas. |
+| 📸 **Galería de capturas** | Miniaturas por fecha, visor en grande, borrar, abrir carpeta. |
+| 💾 **Copias de seguridad** | Exporta la instancia a un `.zip` (mundos, mods, config) y restaúrala arrastrándolo a la ventana. |
+| 🎮 **Discord Rich Presence** | "Minecraft 1.21.4 — con McLite" en tu perfil mientras juegas (apagable). |
+| 🔄 **Auto-update** | Aviso en el arranque, descarga verificada por SHA-256, cierre solo, instalación y re-apertura con rollback configurable. |
+| 🩺 **Diagnóstico** | Log del launcher, espejo del log del juego, crash reports clasificados por causa. |
 
-Baja el `mclite.exe` más reciente de la página de [Releases](../../releases).
+**Descargas verificadas** (SHA-1 en el juego, SHA-256 en el updater), descarga en paralelo con reintentos, y UI oscura con tema verde Minecraft y secciones en acordeón.
 
-- **Tamaño**: ~8,3 MB. No requiere instalación.
+## 📥 Descarga
+
+Baja el `mclite.exe` más reciente de la página de [**Releases**](../../releases).
+
+- **Tamaño**: ~10 MB. No requiere instalación.
 - Windows SmartScreen puede avisar ("editor desconocido") porque el binario no está firmado: pulsa *Más información → Ejecutar de todas formas*.
+- Cada release trae `mclite.exe.sha256`: si quieres verificarlo, `certutil -hashfile mclite.exe SHA256` debe coincidir.
 
-## Uso rápido
+## 🚀 Uso rápido
 
 1. Ejecuta `mclite.exe`.
-2. En **Ajustes**, escribe tu nick (cuenta offline, 3–16 caracteres).
-3. **Nueva instancia** → elige versión de MC, cargador y RAM → **Crear**.
-4. **Jugar**. La primera vez descarga el juego (~500 MB–1 GB); las siguientes arrancan directo.
+2. La primera vez, el onboarding te pide tu nick y tu color favorito.
+3. **Nueva instancia** → versión de MC, cargador y RAM → **Crear**.
+4. **Jugar**. La primera partida descarga el juego (~500 MB–1 GB); las siguientes arrancan directo.
 
-Si mueves o reemplazas el `mclite.exe`, el launcher **importa automáticamente** tu configuración e instancias desde la carpeta de datos anterior (carpeta `mclite/` cercana o `%APPDATA%\mclite`).
+> Si mueves o reemplazas el `mclite.exe`, el launcher **importa automáticamente** tu configuración e instancias desde la carpeta de datos anterior.
 
-## Requisitos
+### Cuenta Microsoft (opcional)
+
+Para jugar con tu nombre, UUID y skin reales necesitas un **Client ID gratuito de Azure** (5 minutos, solo la primera vez). Guía paso a paso: **[docs/MICROSOFT-ACCOUNT.md](docs/MICROSOFT-ACCOUNT.md)**. Sin él, el launcher funciona igual con la cuenta offline.
+
+## 🧭 Trucos
+
+- **Doble clic** en una instancia del sidebar = jugar.
+- **Clic derecho** = Jugar/Editar/Reparar/Carpeta/Borrar.
+- **Arrastra a la ventana**: `.mrpack` → instala el pack · `.jar` → añade el mod (instancias con cargador) · `.png` → aplica la skin · `.zip` de backup → restaura la instancia.
+- **Atajos**: `Ctrl+Enter` jugar · `Ctrl+N` nueva instancia · `Esc` volver.
+- El exe viejo tras una actualización queda como `mclite.exe.old` (rollback); se limpia al arrancar según la ventana que elijas en **Ajustes → Actualizaciones**.
+
+## 📋 Requisitos
 
 - Windows 10/11 x64. Render por DirectX 12 o Vulkan (wgpu), con fallback GLES.
-- Java: **no hace falta**. Se detecta el del sistema o se baja el runtime de Mojang para la versión que pida cada juego (jre-legacy para ≤ 1.8, beta para 1.9–1.17, delta/epsilon para 1.18+).
+- Java: **no hace falta** (ver arriba).
 
-## Compilar
+## 🗂️ Estructura de datos
+
+```
+mclite/
+├── mclite.exe            ← el launcher
+├── mclite/               ← datos (config, instancias, caché)
+│   ├── config.json
+│   ├── instances.json
+│   ├── instances/<slug>/ ← cada instancia (game dir)
+│   ├── cache/icons/      ← iconos de Modrinth
+│   ├── cache/skins/      ← skins offline
+│   └── backups/          ← copias .zip exportadas
+└── logs/launcher.log
+```
+
+## 🧱 Cómo está hecho
+
+Rust + egui/eframe (wgpu), sin `.NET` ni frameworks pesados. Módulos principales:
+
+- `core/` — instalación, lanzamiento, cargadores, manifiesto, skins, updater, MSA, mods, backups, RPC. Sin dependencias de UI: la CLI (`mclite help`) usa lo mismo que la ventana.
+- `ui/` — pantallas egui con el tema propio (acordeón, tarjetas, barra de estado).
 
 ```bash
-# Linux (cross-compile a Windows) — ver scripts/build-windows.sh
-./scripts/build-windows.sh
-
-# Nativo (Windows con MSVC o mingw)
-cargo build --release
+cargo test --no-default-features   # suite de tests
+./scripts/build-windows.sh         # build de release + .sha256
 ```
 
-El binario queda en `target/x86_64-pc-windows-gnu/release/mclite.exe` (cross) o `target/release/mclite.exe` (nativo).
+## 📄 Licencia
 
-Tests del núcleo (sin GUI):
-
-```bash
-cargo test --no-default-features
-```
-
-## Estructura
-
-```
-src/
-├── main.rs            # CLI (open, crashes, root…) + arranque de la GUI
-├── app.rs             # estado de la ventana, mensajes de hilos de fondo
-├── core/              # sin UI: paths, http, manifiestos, assets, runtime, modrinth…
-└── loaders/           # vanilla, fabric+quilt, forge+neoforge, optifine
-```
-
-Cada cargador genera un manifiesto de versión ya resuelto (merge de herencia incluido) que el lanzador consume igual para los seis. No se redistribuye ningún archivo de Mojang: todo se descarga de sus servidores oficiales (y BMCLAPI solo como espejo para OptiFine).
-
-## Licencia
-
-Propietaria: se permite usar el programa tal cual, pero **no redistribuirlo** ni reutilizar su código. Ver [LICENSE](LICENSE).
+Propietaria — ver [LICENSE](LICENSE). Minecraft es de Mojang/Microsoft; este launcher no está afiliado a ellos.
