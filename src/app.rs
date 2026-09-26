@@ -459,12 +459,15 @@ impl McLiteApp {
             done: 0,
             started: std::time::Instant::now(),
         });
+        // El aviso se retira YA: sin esto se podría dar Actualizar otra vez
+        // mientras descarga, o reactivarse al volver del reinicio.
+        self.update_available = None;
         self.error = None;
 
         std::thread::spawn(move || {
             let http = HttpClient::new();
             let progress = Progress::new(GuiSink::new(tx.clone()));
-            let result = (|| -> Result<(), crate::Error> {
+            let result = (|| -> Result<updater::SwapOutcome, crate::Error> {
                 progress.phase("Consultando el release");
                 let Some(release) = updater::latest_release(&http) else {
                     return Err(crate::Error::Unsupported(
@@ -475,12 +478,35 @@ impl McLiteApp {
                 let new_exe = updater::download_update(&http, &paths, &release)?;
                 progress.phase("Colocando el exe nuevo");
                 match updater::apply_swap(&new_exe) {
-                    Ok(updater::SwapOutcome::Done | updater::SwapOutcome::NeedsHelper) => Ok(()),
+                    Ok(outcome @ (updater::SwapOutcome::Done | updater::SwapOutcome::NeedsHelper)) => {
+                        Ok(outcome)
+                    }
                     Err(err) => Err(err),
                 }
             })();
             match result {
-                Ok(()) => tx.send(Message::UpdateReady),
+                Ok(outcome) => {
+                    // Reinicio automático: relanzar el exe nuevo y cerrar este.
+                    // (Con rename ok, el exe nuevo ya está en su sitio y este
+                    // proceso corre desde el .old; con helper, el .bat espera
+                    // a que salgamos para completar el cambio.)
+                    let mut command = std::process::Command::new(std::env::current_exe().unwrap_or_default());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        command.creation_flags(0x0000_0008); // DETACHED_PROCESS
+                    }
+                    let restarted = command.spawn().is_ok();
+                    logging::info(&format!(
+                        "actualización aplicada ({outcome:?}); reinicio: {restarted}"
+                    ));
+                    tx.send(Message::UpdateReady);
+                    std::thread::sleep(std::time::Duration::from_millis(900));
+                    if restarted {
+                        std::process::exit(0);
+                    }
+                    // Sin reinicio: el launcher queda abierto con el aviso.
+                }
                 Err(err) => tx.send(Message::Failed(err.to_string())),
             }
         });
@@ -889,7 +915,7 @@ impl McLiteApp {
             }
             Message::UpdateReady => {
                 self.job = None;
-                self.notify("Actualizado: reinicia para usar la versión nueva", ToastKind::Ok);
+                self.notify("Actualizado: reiniciando la versión nueva…", ToastKind::Ok);
             }
             Message::SkinResolved(bytes) => {
                 self.job = None;
