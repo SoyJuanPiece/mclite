@@ -205,6 +205,15 @@ pub fn build(ctx: &LaunchContext<'_>) -> Result<LaunchPlan> {
         )));
     }
 
+    // DEFENSA: el `--gameDir` debería venir del manifiesto vanilla, pero si un
+    // perfil de cargador lo pierde al fusionar, el juego usaría su carpeta de
+    // trabajo (¡la del launcher!) y cargaría mods/config de donde no toca. Si
+    // no está, lo añadimos SIEMPRE apuntando al game_dir de la instancia.
+    if !game_args.iter().any(|arg| arg == "--gameDir") {
+        game_args.push("--gameDir".into());
+        game_args.push(ctx.game_dir.display().to_string());
+    }
+
     // Args de JVM que añade el launcher (van antes de los del manifiesto).
     let mut launcher_jvm_args: Vec<String> = Vec::new();
     launcher_jvm_args.push(format!("-Xmx{}M", ctx.memory_mb.max(512)));

@@ -2433,6 +2433,7 @@ impl McLiteApp {
                     format!("Mod copiado a «{}»", instance.name),
                     ToastKind::Ok,
                 );
+                self.refresh_instance_extras();
             }
             Err(err) => {
                 self.error = Some(crate::Error::io(&dest, err).to_string());
