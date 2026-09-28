@@ -69,6 +69,28 @@ impl HttpClient {
         }))
     }
 
+    /// HEAD siguiendo redirects (ureq los sigue solo): devuelve la URL final de la
+    /// cadena y el Content-Length si el servidor lo dio. Sirve para resolver
+    /// redirecciones tipo «descarga» sin bajar el cuerpo dos veces.
+    pub fn probe(&self, url: &str) -> Result<(String, Option<u64>)> {
+        let response = self
+            .agent
+            .head(url)
+            .call()
+            .map_err(|err| match err {
+                ureq::Error::StatusCode(code) => Error::Http(format!("HTTP {code} en {url}")),
+                other => Error::Http(format!("{other} en {url}")),
+            })?;
+        use ureq::ResponseExt as _;
+        let final_url = response.get_uri().to_string();
+        let length = response
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        Ok((final_url, length))
+    }
+
     pub fn get_string(&self, url: &str) -> Result<String> {
         let mut response = self.call(url)?;
         let mut body = String::new();

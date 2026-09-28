@@ -8,6 +8,7 @@ pub mod auth;
 pub mod backup;
 pub mod config;
 pub mod crash;
+pub mod curseforge;
 pub mod endpoints;
 pub mod error;
 pub mod hash;

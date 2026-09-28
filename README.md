@@ -12,7 +12,7 @@
 |---|---|
 | 🪟 **Portable de verdad** | Un ejecutable. La configuración vive en una carpeta `mclite/` junto al exe (o `%APPDATA%\mclite` si la carpeta no es escribible). |
 | 🧩 **6 cargadores** | Vanilla, Fabric, Quilt, Forge, NeoForge y OptiFine. |
-| 📦 **Modpacks `.mrpack`** | Instala un modpack arrastrando su `.mrpack` a la ventana. |
+| 📦 **Modpacks** | Instala un modpack arrastrándolo a la ventana: `.mrpack` de Modrinth o el zip de CurseForge (los mods se resuelven solos, sin claves). |
 | ☕ **Java automático** | Usa el del sistema si sirve; si no, baja el runtime oficial de Mojang. Nada que instalar. |
 | ⚡ **Sodium a un clic** | Para instancias Fabric (y casilla al crear). |
 | 👤 **Dos tipos de cuenta** | Offline con nick local, o **cuenta Microsoft real** por device code (nombre, UUID y skin de Mojang). |

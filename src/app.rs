@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::core::crash;
+use crate::core::curseforge;
 use crate::core::updater;
 use crate::core::logging;
 use crate::core::mrpack;
@@ -2104,7 +2105,15 @@ impl McLiteApp {
             match extension.as_str() {
                 "mrpack" => self.install_local_mrpack(path),
                 "jar" => self.install_local_jar(path),
-                "zip" => self.import_backup_from_file(path),
+                // Un .zip puede ser backup de McLite o pack de CurseForge: se
+                // distingue por el manifiesto que lleve dentro.
+                "zip" => {
+                    if curseforge::is_curseforge_zip(&path) {
+                        self.install_local_curseforge(path);
+                    } else {
+                        self.import_backup_from_file(path);
+                    }
+                }
                 "png" => {
                     match crate::core::skins::from_local_png(&path) {
                         Ok(bytes) => self.apply_skin_bytes(bytes),
@@ -2130,6 +2139,88 @@ impl McLiteApp {
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_else(|| "Pack local".to_string());
         self.start_pack_install_from_file(path, name);
+    }
+
+    /// Instala un pack de CurseForge arrastrado a la ventana: igual que el flujo
+    /// del .mrpack, pero los mods se resuelven con cfwidget (projectID/fileID).
+    pub(crate) fn install_local_curseforge(&mut self, path: std::path::PathBuf) {
+        if self.job.is_some() {
+            self.notify("Espera a que termine lo que está en curso", ToastKind::Error);
+            return;
+        }
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Pack de CurseForge".to_string());
+        let tx = self.tx.clone();
+        let paths = self.paths.clone();
+        let config = self.config.clone();
+
+        self.job = Some(Job {
+            label: format!("Pack {name}"),
+            phase: "Leyendo el pack".to_string(),
+            total: 0,
+            done: 0,
+            started: std::time::Instant::now(),
+        });
+        self.error = None;
+
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let progress = Progress::new(GuiSink::new(tx.clone()));
+            let result = (|| -> Result<String, crate::Error> {
+                let manifest = curseforge::read_manifest(&path)?;
+                let (kind, loader_version) = match manifest.loader() {
+                    Some(parts) => parts,
+                    None => {
+                        return Err(crate::Error::Unsupported(
+                            "el pack pide un cargador que no conozco (¿quilt? ¿vanilla?)".into(),
+                        ));
+                    }
+                };
+                let mc_version = if manifest.minecraft.version.is_empty() {
+                    "release".to_string()
+                } else {
+                    manifest.minecraft.version.clone()
+                };
+
+                let slug_instancia = {
+                    let mut store = InstanceStore::load(&paths);
+                    let mut instance = Instance::new(&name, &mc_version, kind);
+                    instance.loader_version = Some(loader_version.clone());
+                    instance.from_pack = Some(name.clone());
+                    let slug_instancia = store.add(instance, &paths)?;
+                    store.save(&paths)?;
+                    slug_instancia
+                };
+                let game_dir = paths.instance_dir(&slug_instancia);
+                std::fs::create_dir_all(&game_dir)
+                    .map_err(|e| crate::Error::io(&game_dir, e))?;
+
+                let request = PlayRequest {
+                    kind,
+                    mc_version: mc_version.clone(),
+                    loader_version: Some(loader_version),
+                    game_dir: game_dir.clone(),
+                    username: config.username_or_default(),
+                    account: resolve_account(&config, &paths),
+                    memory_mb: config.clamped_ram(),
+                    width: 854,
+                    height: 480,
+                    java: config.java_path.clone(),
+                    extra_jvm_args: Vec::new(),
+                    filter: config.version_filter(),
+                };
+                let opts = InstallOptions::default();
+                install::prepare(&http, &paths, &request, &opts, &progress)?;
+                curseforge::install(&http, &paths, &path, &game_dir, opts.threads, &progress)?;
+                Ok(slug_instancia)
+            })();
+            match result {
+                Ok(slug) => tx.send(Message::PackInstalled(slug)),
+                Err(err) => tx.send(Message::Failed(err.to_string())),
+            }
+        });
     }
 
     /// Aplica una skin (bytes PNG) a la instancia seleccionada: la deja donde
