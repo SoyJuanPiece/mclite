@@ -119,8 +119,9 @@ pub fn read_manifest(zip_path: &Path) -> Result<CfManifest> {
 
 // ── cfwidget: projectID/fileID → URL ────────────────────────────────────────
 
-/// Respuesta de cfwidget para un proyecto. Solo nos interesan los ficheros y la
-/// URL de la página (para saber la categoría).
+/// Respuesta de cfwidget para un proyecto. Solo nos interesan el título y la
+/// URL de la página (para saber la categoría): el resto del JSON (description,
+/// files[], download…) se ignora al deserializar.
 #[derive(Debug, Deserialize)]
 struct WidgetProject {
     #[serde(default)]
@@ -129,21 +130,12 @@ struct WidgetProject {
     title: Option<String>,
     #[serde(default)]
     urls: WidgetUrls,
-    #[serde(default)]
-    files: Vec<WidgetFile>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct WidgetUrls {
     #[serde(default)]
     curseforge: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WidgetFile {
-    id: u64,
-    #[serde(default, rename = "name")]
-    file_name: Option<String>,
 }
 
 /// Un (projectID, fileID) resuelto: URL final del CDN + nombre de fichero.
@@ -390,10 +382,7 @@ mod tests {
         let raw = r#"{
             "id": 238222,
             "title": "Just Enough Items (JEI)",
-            "urls": { "curseforge": "https://www.curseforge.com/minecraft/mc-mods/jei" },
-            "files": [
-                { "id": 4612345, "name": "jei-1.20.1-forge.jar", "type": "beta" }
-            ]
+            "urls": { "curseforge": "https://www.curseforge.com/minecraft/mc-mods/jei" }
         }"#;
         let project: WidgetProject = serde_json::from_str(raw).unwrap();
         assert_eq!(project.title.as_deref(), Some("Just Enough Items (JEI)"));
