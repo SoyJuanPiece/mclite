@@ -44,11 +44,11 @@ pub struct Instance {
     pub playtime_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
-    /// Icono de la instancia: URL (p. ej. icono del pack en Modrinth) o vacío
+    /// Icono de la instancia: URL (p. ej. icono del pack instalado) o vacío
     /// para usar el avatar derivado del nombre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// Título del pack de Modrinth del que nació, si es un modpack instalado.
+    /// Título del pack del que nació, si es un modpack instalado.
     /// Sirve para agruparlas en el lateral.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_pack: Option<String>,

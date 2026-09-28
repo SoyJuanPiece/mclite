@@ -1,19 +1,18 @@
-//! Modrinth: búsqueda de modpacks, versiones e instalación de `.mrpack`.
+//! Instalación de modpacks `.mrpack` desde un fichero local (drag & drop).
 //!
 //! Un `.mrpack` es un zip con dos cosas: `modrinth.index.json` (la lista de mods
 //! con sus URLs y hashes, más el loader y la versión de MC que necesita) y
 //! `overrides/` (config, options.txt, mods locales… que se vuelca sobre el
-//! gameDir). El flujo de instalación:
+//! gameDir). El flujo de instalación, igual para un pack arrastrado a la ventana:
 //!
 //! 1. Instalar el juego base (loader + MC del índice) con el flujo normal.
 //! 2. Descargar cada fichero del índice a su ruta dentro del gameDir.
 //! 3. Volcar `overrides/` sobre el gameDir.
 //!
-//! API v2 verificada 2026-09: `search` (facets `project_type:modpack`),
-//! `project/{slug}/version` y los ficheros del índice con `downloads[]`
-//! (primera URL) + `hashes.sha1`.
+//! Formato del índice verificado 2026-09: ficheros con `downloads[]` (primera
+//! URL) + `hashes.sha1` y `env.client` opcional.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::Path;
 
 use crate::core::error::{Error, Result};
@@ -21,250 +20,6 @@ use crate::core::http::{Download, HttpClient, download_all};
 use crate::core::paths::Paths;
 use crate::core::progress::Progress;
 use crate::loaders::LoaderKind;
-
-pub const API: &str = "https://api.modrinth.com";
-/// La CLI de modrinth pide identificar el cliente: formato `repo/version`.
-pub(crate) const USER_AGENT: &str = concat!("mclite/", env!("CARGO_PKG_VERSION"));
-
-// ── Búsqueda ─────────────────────────────────────────────────────────────────
-
-/// Un resultado de búsqueda (proyecto tipo modpack).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackHit {
-    pub project_id: String,
-    pub slug: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub downloads: u64,
-    /// La última versión está cubierta por estas versiones de MC.
-    #[serde(default)]
-    pub versions: Vec<String>,
-    #[serde(default)]
-    pub categories: Vec<String>,
-    #[serde(default)]
-    pub icon_url: Option<String>,
-    /// Solo en la búsqueda (el detalle no lo trae).
-    #[serde(default)]
-    pub author: Option<String>,
-}
-
-/// Detalle completo de un pack (GET /v2/project/{slug}).
-///
-/// Ojo, el detalle NO es idéntico al hit de búsqueda: la id va como `id` (no
-/// `project_id`), las versiones de MC como `game_versions`, y NO trae autor
-/// (ese solo viene en la búsqueda; por eso `author()` admite fallback).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackDetail {
-    #[serde(alias = "id", default)]
-    pub project_id: String,
-    pub slug: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    /// Descripción larga en Markdown.
-    #[serde(default)]
-    pub body: String,
-    #[serde(default)]
-    pub downloads: u64,
-    #[serde(default)]
-    pub followers: u64,
-    #[serde(default)]
-    pub categories: Vec<String>,
-    #[serde(default)]
-    pub icon_url: Option<String>,
-    // Solo game_versions: el JSON trae TAMBIÉN `versions` (ids de versiones del
-    // pack), y un alias a otro nombre distinto haría que serde los tratara como
-    // duplicados del mismo campo.
-    #[serde(rename = "game_versions", default)]
-    pub versions: Vec<String>,
-    #[serde(default)]
-    pub published: Option<String>,
-    #[serde(default)]
-    pub license: Option<serde_json::Value>,
-    /// En algunos endpoints viene como `user.username`.
-    #[serde(default)]
-    pub user: Option<PackAuthor>,
-    #[serde(default)]
-    pub author: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackAuthor {
-    #[serde(default)]
-    pub username: String,
-}
-
-impl PackDetail {
-    pub fn author(&self) -> &str {
-        self.user
-            .as_ref()
-            .map(|user| user.username.as_str())
-            .or(self.author.as_deref())
-            .unwrap_or("desconocido")
-    }
-
-    /// Versión de MC más reciente del pack. La lista va en orden ASCENDENTE
-    /// (verificado contra la API), así que la más nueva es la ÚLTIMA.
-    pub fn newest_mc(&self) -> Option<&String> {
-        self.versions.last()
-    }
-}
-
-/// Detalle completo de un pack.
-pub fn detail(http: &HttpClient, slug: &str) -> Result<PackDetail> {
-    let url = format!("{API}/v2/project/{slug}");
-    http.get_json_ua(&url, USER_AGENT)
-        .map_err(|e| Error::Http(format!("detalle de {slug}: {e}")))
-}
-
-/// Tipos de proyecto que explora la pestaña Modrinth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectType {
-    Modpack,
-    Mod,
-    ResourcePack,
-    DataPack,
-    Shader,
-}
-
-impl ProjectType {
-    /// Valor del facet `project_type:` en la API.
-    pub fn facet(self) -> &'static str {
-        match self {
-            ProjectType::Modpack => "modpack",
-            ProjectType::Mod => "mod",
-            ProjectType::ResourcePack => "resourcepack",
-            ProjectType::DataPack => "datapack",
-            ProjectType::Shader => "shader",
-        }
-    }
-
-    /// Etiqueta para la UI.
-    pub fn label(self) -> &'static str {
-        match self {
-            ProjectType::Modpack => "MODPACKS",
-            ProjectType::Mod => "MODS",
-            ProjectType::ResourcePack => "RESOURCE PACKS",
-            ProjectType::DataPack => "DATAPACKS",
-            ProjectType::Shader => "SHADERS",
-        }
-    }
-
-    pub const ALL: [ProjectType; 5] = [
-        ProjectType::Modpack,
-        ProjectType::Mod,
-        ProjectType::ResourcePack,
-        ProjectType::DataPack,
-        ProjectType::Shader,
-    ];
-}
-
-/// Orden de resultados de la búsqueda.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchSort {
-    Relevance,
-    Downloads,
-    Follows,
-    Newest,
-    Updated,
-}
-
-impl SearchSort {
-    pub fn api(self) -> &'static str {
-        match self {
-            SearchSort::Relevance => "relevance",
-            SearchSort::Downloads => "downloads",
-            SearchSort::Follows => "follows",
-            SearchSort::Newest => "newest",
-            SearchSort::Updated => "updated",
-        }
-    }
-
-    pub const ALL: [SearchSort; 5] = [
-        SearchSort::Relevance,
-        SearchSort::Downloads,
-        SearchSort::Follows,
-        SearchSort::Newest,
-        SearchSort::Updated,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            SearchSort::Relevance => "Relevancia",
-            SearchSort::Downloads => "Descargas",
-            SearchSort::Follows => "Favoritos",
-            SearchSort::Newest => "Nuevos",
-            SearchSort::Updated => "Actualizados",
-        }
-    }
-}
-
-/// Busca proyectos de Modrinth por texto, tipo, versión de MC y orden.
-pub fn search(
-    http: &HttpClient,
-    query: &str,
-    project_type: ProjectType,
-    mc_version: Option<&str>,
-    sort: SearchSort,
-    limit: usize,
-) -> Result<Vec<PackHit>> {
-    #[derive(Deserialize)]
-    struct SearchResponse {
-        hits: Vec<PackHit>,
-    }
-    // Facets: [[...]] es OR interno, [[..],[..]] es AND entre listas.
-    // Los DOS van urlencoded: el JSON trae corchetes y comillas, que en una URI
-    // sin codificar hacen que ureq rechace la petición (invalid uri character).
-    let mut facets_json = serde_json::json!([[format!("project_type:{}", project_type.facet())]]);
-    if let Some(mc) = mc_version {
-        if !mc.is_empty() {
-            facets_json
-                .as_array_mut()
-                .expect("facets es array")
-                .push(serde_json::json!([[format!("versions:{mc}")]]));
-        }
-    }
-    let facets = urlencode(&facets_json.to_string());
-    let url = format!(
-        "{API}/v2/search?limit={limit}&query={query}&facets={facets}&index={sort}",
-        query = urlencode(query),
-        sort = sort.api(),
-    );
-    let response: SearchResponse = http.get_json_ua(&url, USER_AGENT)?;
-    Ok(response.hits)
-}
-
-/// Versiones (files) de un modpack, más nuevas primero.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackVersion {
-    pub id: String,
-    pub name: String,
-    pub version_number: String,
-    #[serde(default)]
-    pub game_versions: Vec<String>,
-    #[serde(default)]
-    pub loaders: Vec<String>,
-    #[serde(default)]
-    pub files: Vec<VersionFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VersionFile {
-    pub url: String,
-    pub filename: String,
-    #[serde(default)]
-    pub primary: bool,
-    #[serde(default)]
-    pub size: u64,
-}
-
-pub fn versions(http: &HttpClient, slug: &str) -> Result<Vec<PackVersion>> {
-    let url = format!("{API}/v2/project/{slug}/version");
-    let list: Vec<PackVersion> = http.get_json_ua(&url, USER_AGENT)?;
-    Ok(list)
-}
 
 // ── Índice del .mrpack ───────────────────────────────────────────────────────
 
@@ -494,28 +249,9 @@ fn safe_rel_path(rel: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-pub(crate) fn urlencode(raw: &str) -> String {
-    let mut out = String::new();
-    for byte in raw.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            other => out.push_str(&format!("%{other:02X}")),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn encode_query() {
-        assert_eq!(urlencode("fabulously optimized"), "fabulously%20optimized");
-        assert_eq!(urlencode("a+b"), "a%2Bb");
-    }
 
     #[test]
     fn rutas_seguras_del_indice() {

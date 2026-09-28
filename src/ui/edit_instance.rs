@@ -49,7 +49,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             ui.label(theme::title(&format!("Editar «{}»", instance.name)));
             if let Some(pack) = &instance.from_pack {
                 ui.label(theme::muted(format!(
-                    "Instalada del pack «{pack}» de Modrinth — su icono se conserva al editar"
+                    "Instalada del pack «{pack}» — su icono se conserva al editar"
                 )));
             }
             ui.add_space(10.0);

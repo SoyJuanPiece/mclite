@@ -57,17 +57,6 @@ pub fn segmented_pill(ui: &mut Ui, selected: bool, text: &str) -> bool {
     response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
-/// Formatea un contador de descargas al estilo Modrinth: 1234 → "1,2 k".
-pub fn format_count(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1} M", n as f32 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1} k", n as f32 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
-
 /// Recorta texto largo con elipsis al centro: útil para rutas y valores
 /// largos en pistas de una línea ("...\\versions\\1.21.4").
 pub fn collapse(text: &str, max: usize) -> String {

@@ -1,4 +1,4 @@
-//! Caché de iconos en disco (Modrinth y cualquier URL remota).
+//! Caché de iconos en disco (cualquier URL remota).
 //!
 //! `resolve()` devuelve una ruta `file://…` lista para `egui::Image::from_uri`:
 //! si el icono ya está en `cache/icons/<sha1(url)>`, es instantáneo (y funciona

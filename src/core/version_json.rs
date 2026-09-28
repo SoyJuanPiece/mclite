@@ -5,7 +5,9 @@
 //!
 //! * escalares → gana el hijo, y si el hijo no los trae, se heredan del padre;
 //! * `libraries` → **hijo primero** (sus clases deben ganar en el classpath);
-//! * `arguments` → **padre primero, hijo después** (el hijo sobreescribe al final).
+//! * `arguments` → **padre primero, hijo después** (el hijo sobreescribe al final);
+//! * las dos eras de formato no se mezclan: si el padre es pre-1.13, el resultado
+//!   se reduce a `minecraftArguments` (ver `merge`).
 
 use serde::{Deserialize, Serialize};
 
@@ -254,6 +256,45 @@ impl VersionJson {
         if let Some(child_args) = &child.arguments {
             arguments.game.extend(child_args.game.clone());
             arguments.jvm.extend(child_args.jvm.clone());
+        }
+
+        // Las dos eras de formato no se mezclan. Si el padre es de la era antigua
+        // (pre-1.13, con `minecraftArguments`), el perfil del hijo se reduce a esa
+        // cadena: sus tokens (el `--tweakClass`, p. ej.) se concatenan a los del
+        // padre y `arguments` desaparece. Si no, un hijo que traiga ambos formatos
+        // — como los perfiles que dejó mclite 0.9.4 en disco, con el tweakClass en
+        // `arguments.game` y a la vez en `minecraftArguments` — hacía que
+        // `build()` expandiera solo los tokens modernos y el juego arrancara sin
+        // `--username`/`--assetsDir` (NPE dentro de OptiFineTweaker).
+        let padre_moderno = parent
+            .arguments
+            .as_ref()
+            .is_some_and(|args| !args.game.is_empty());
+        if !padre_moderno {
+            if let Some(legacy_padre) = &parent.minecraft_arguments {
+                let mut tokens: Vec<String> =
+                    legacy_padre.split_whitespace().map(String::from).collect();
+                if let Some(legacy_hijo) = &child.minecraft_arguments {
+                    for token in legacy_hijo.split_whitespace() {
+                        if !tokens.iter().any(|existente| existente == token) {
+                            tokens.push(token.to_string());
+                        }
+                    }
+                }
+                for arg in &arguments.game {
+                    if let ArgValue::Plain(token) = arg {
+                        if !tokens.contains(token) {
+                            tokens.push(token.clone());
+                        }
+                    }
+                }
+                out.minecraft_arguments = Some(tokens.join(" "));
+                // La era antigua no usa `arguments` (ni `game` ni `jvm`): si el
+                // hijo trajera `jvm`, `build()` lo usaría en lugar de los
+                // `-Djava.library.path`/`-cp` que el juego antiguo necesita.
+                out.arguments = None;
+                return out;
+            }
         }
         out.arguments = Some(arguments);
 

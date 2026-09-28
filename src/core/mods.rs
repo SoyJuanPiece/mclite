@@ -3,7 +3,7 @@
 //! Un mod desactivado se renombra a `*.disabled` (convención de Fabric/Quilt y
 //! la que usa Forge moderno): el juego lo ignora y el launcher lo puede
 //! reactivar renombrándolo de vuelta. Sin descargas: instalar mods es cosa de
-//! Modrinth (pestaña Modpacks) o de arrastrar un .jar a la ventana.
+//! arrastrar un .jar a la ventana.
 
 use std::path::{Path, PathBuf};
 

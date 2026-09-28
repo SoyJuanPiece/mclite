@@ -10,7 +10,6 @@ enum Action {
     Edit,
     Repair,
     Delete,
-    SkinSupport,
     Backup,
 }
 
@@ -231,7 +230,7 @@ fn hero(
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if let Some(url) = icon {
-                    // Instancia con icono (pack de Modrinth): miniatura del pack.
+                    // Instancia con icono (pack instalado): miniatura del pack.
                     match super::icons::texture_for_url(ui, paths, url) {
                         Some(texture) => {
                             ui.add(
@@ -401,14 +400,6 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             }
             if ui.add_enabled(!busy, small("Reparar")).clicked() {
                 action = Some(Action::Repair);
-            }
-            // Soporte de skins: solo tiene sentido con mod (Fabric/Forge/Quilt/NeoForge).
-            if !matches!(
-                instance.loader,
-                crate::loaders::LoaderKind::Vanilla | crate::loaders::LoaderKind::OptiFine
-            ) && ui.add_enabled(!busy, small("Skins")).clicked()
-            {
-                action = Some(Action::SkinSupport);
             }
             let label = if confirm {
                 "¿Borrar de verdad?"
@@ -693,7 +684,6 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         Some(Action::Play) => app.start_play(slug),
         Some(Action::Edit) => app.open_edit(slug),
         Some(Action::Repair) => app.start_repair(slug),
-        Some(Action::SkinSupport) => app.install_skin_support(slug),
         Some(Action::Backup) => app.start_backup_export(),
         Some(Action::Delete) => match app.store.remove(slug, true, &app.paths) {
             Ok(_) => {

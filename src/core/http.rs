@@ -17,6 +17,10 @@ use crate::core::progress::Progress;
 /// Conexiones simultáneas por defecto. Más de 16 suele empeorar las cosas
 /// (los servidores de Mojang empiezan a cortar) y satura discos lentos.
 pub const DEFAULT_THREADS: usize = 8;
+
+/// User-Agent del launcher, formato `repo/version` (lo piden explícitamente
+/// varias APIs con las que habla: Mojang, Modrinth, GitHub…).
+pub const USER_AGENT: &str = concat!("mclite/", env!("CARGO_PKG_VERSION"));
 const MAX_THREADS: usize = 16;
 const ATTEMPTS: u32 = 3;
 
@@ -36,7 +40,7 @@ impl HttpClient {
         let config = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_body(Some(Duration::from_secs(300)))
-            .user_agent(concat!("mclite/", env!("CARGO_PKG_VERSION")))
+            .user_agent(USER_AGENT)
             .build();
         Self {
             agent: config.into(),
@@ -81,7 +85,7 @@ impl HttpClient {
         serde_json::from_str(&raw).map_err(Error::from)
     }
 
-    /// JSON con User-Agent propio. La API de Modrinth pide identificarse con
+    /// JSON con User-Agent propio. Algunas APIs piden identificarse con
     /// `repo/version` (el genérico que traen otros endpoints del launcher no
     /// basta para sus reglas de uso).
     pub fn get_json_ua<T: DeserializeOwned>(&self, url: &str, user_agent: &str) -> Result<T> {

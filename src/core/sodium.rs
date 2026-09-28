@@ -7,13 +7,29 @@
 use serde::Deserialize;
 
 use crate::core::error::{Error, Result};
-use crate::core::http::{Download, HttpClient};
-use crate::core::modrinth::{urlencode, API};
+use crate::core::http::{Download, HttpClient, USER_AGENT};
 use crate::core::progress::Progress;
+
+/// API de Modrinth (de aquí se baja Sodium como un mod normal).
+const API: &str = "https://api.modrinth.com";
 
 /// `AANobbMI` = Sodium en Modrinth (https://modrinth.com/mod/sodium).
 const SODIUM_PROJECT_ID: &str = "AANobbMI";
-const USER_AGENT: &str = concat!("mclite/", env!("CARGO_PKG_VERSION"));
+
+/// Codifica un valor de query string (los parámetros `game_versions`/`loaders`
+/// van como JSON: traen corchetes y comillas).
+pub(crate) fn urlencode(raw: &str) -> String {
+    let mut out = String::new();
+    for byte in raw.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SodiumVersion {
@@ -87,6 +103,12 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_query() {
+        assert_eq!(urlencode("[\"1.21.4\"]"), "%5B%221.21.4%22%5D");
+        assert_eq!(urlencode("a+b"), "a%2Bb");
+    }
 
     #[test]
     fn parsea_la_respuesta_de_modrinth() {

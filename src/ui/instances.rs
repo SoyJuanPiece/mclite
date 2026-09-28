@@ -2,7 +2,7 @@
 //!
 //! Las filas se pintan a mano (painter + ui hijo) para tener avatar o icono,
 //! dos líneas de texto y barra de acento en la seleccionada. Las instancias
-//! nacidas de un pack de Modrinth se agrupan en su propia sección.
+//! nacidas de un pack instalado se agrupan en su propia sección.
 
 use egui::{Color32, CornerRadius, RichText, Sense, Ui, Vec2};
 
@@ -14,7 +14,7 @@ use crate::ui::{theme, widgets};
 
 /// Fila del lateral. Se pinta el fondo a mano y el contenido con un ui hijo
 /// anclado al rect (permite mezclar imagen de icono y textos). `dot` añade un
-/// círculo de color; `icon` una miniatura (URL, p. ej. pack de Modrinth).
+/// círculo de color; `icon` una miniatura (URL, p. ej. icono de un pack).
 fn side_item(
     ui: &mut Ui,
     paths: &crate::core::paths::Paths,
@@ -138,7 +138,6 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     let mut picked: Option<String> = None;
     let mut go_new = false;
     let mut go_home = false;
-    let mut go_modpacks = false;
     let mut go_settings = false;
     // Doble clic sobre una fila = JUGAR esa instancia.
     let mut play: Option<String> = None;
@@ -184,20 +183,6 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 .clicked()
             {
                 go_home = true;
-            }
-            if side_item(
-                ui,
-                &app.paths,
-                screen == Screen::Modpacks,
-                "■  Modpacks",
-                None,
-                None,
-                None,
-                theme::TEXT,
-            )
-            .clicked()
-            {
-                go_modpacks = true;
             }
             if side_item(
                 ui,
@@ -261,7 +246,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                         handle_instance_row(ui, &app.paths, row, &mut picked, &mut play, &mut menu_for);
                     }
 
-                    // Sección 2: modpacks instalados desde Modrinth.
+                    // Sección 2: modpacks instalados.
                     if !packs.is_empty() {
                         ui.add_space(6.0);
                         widgets_section(ui, &format!("MODPACKS ({})", packs.len()));
@@ -279,13 +264,6 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
     }
     if go_new {
         app.open_new();
-    }
-    if go_modpacks {
-        app.screen = Screen::Modpacks;
-        // Primera vez que se abre: populares sin escribir nada.
-        if app.packs.is_empty() && !app.packs_loading {
-            app.search_packs();
-        }
     }
     if go_settings {
         app.screen = Screen::Settings;

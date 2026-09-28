@@ -156,12 +156,12 @@ impl Paths {
         self.root.join("logs")
     }
 
-    /// `.mrpack` descargados de Modrinth, antes de instalarlos.
+    /// `.mrpack` descargados, antes de instalarlos.
     pub fn packs_dir(&self) -> PathBuf {
         self.root.join("packs")
     }
 
-    /// Caché de iconos remotos (Modrinth), para no re-descargarlos cada sesión.
+    /// Caché de iconos remotos, para no re-descargarlos cada sesión.
     pub fn cache_icons(&self) -> PathBuf {
         self.root.join("cache").join("icons")
     }

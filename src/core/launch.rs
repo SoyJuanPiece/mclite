@@ -14,6 +14,9 @@
 //!   queda un `--width` sin valor y el juego no arranca.
 //! * `logging.client.argument` (`-Dlog4j.configurationFile=${path}`) lo añade el
 //!   launcher, no está en `arguments.jvm`.
+//! * Un perfil hijo que **solo añade** `arguments.game` (p. ej. `--tweakClass` de
+//!   OptiFine) no borra el `minecraftArguments` heredado del padre: se expanden
+//!   ambos. Así los perfiles oficiales de cargadores funcionan también en < 1.13.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -186,6 +189,11 @@ pub fn build(ctx: &LaunchContext<'_>) -> Result<LaunchPlan> {
         }
     }
 
+    // DEFENSA: los perfiles de cargadores (OptiFine < 1.13) pueden añadir
+    // argumentos de juego sin traer `minecraftArguments`. El padre sí lo trae, y
+    // descartarlo dejaría el juego sin `--username`, `--assetsDir`… (NPE dentro
+    // de OptiFineTweaker en 0.9.4). No perdemos NUNCA los argumentos del padre:
+    // se expanden primero los suyos y después los del hijo.
     if game_args.is_empty() {
         if let Some(legacy) = &ctx.version.minecraft_arguments {
             for token in legacy.split_whitespace() {
@@ -484,6 +492,39 @@ mod tests {
         assert!(!log4shell_risk("1.21.4"));
         assert!(!log4shell_risk("26.3"));
         assert!(!log4shell_risk("b1.7.3"));
+    }
+
+    #[test]
+    fn los_args_heredados_no_se_descartan_cuando_el_hijo_trae_arguments() {
+        // El bug 0.9.4 de OptiFine 1.8.9: el hijo traía `arguments.game`
+        // (solo el tweakClass) y el `minecraftArguments` del padre se ignoraba:
+        // el juego arrancaba sin `--assetsDir` y OptiFineTweaker moría con NPE.
+        let parent = VersionJson::from_str(
+            r#"{"id":"1.8.9","mainClass":"net.minecraft.client.main.Main","assets":"1.8",
+                "minecraftArguments":"--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token}"}"#,
+        )
+        .unwrap();
+        let child = VersionJson::from_str(
+            r#"{"id":"OptiFine-1.8.9-HD_U_H5","inheritsFrom":"1.8.9",
+                "mainClass":"net.minecraft.launchwrapper.Launch",
+                "minecraftArguments":"--tweakClass optifine.OptiFineTweaker",
+                "arguments":{"game":["--tweakClass","optifine.OptiFineTweaker"]}}"#,
+        )
+        .unwrap();
+        let merged = VersionJson::merge(&parent, &child);
+
+        let paths = paths();
+        let account = account();
+        let plan = build(&context(&merged, &account, &paths, &[])).unwrap();
+
+        // Todos los argumentos del juego: los del padre y el tweakClass.
+        assert!(plan.game_args.contains(&"--tweakClass".to_string()));
+        assert!(plan.game_args.iter().any(|a| a == "optifine.OptiFineTweaker"));
+        assert!(plan.game_args.contains(&"--assetsDir".to_string()));
+        let username = plan.game_args.iter().position(|a| a == "--username").unwrap();
+        assert_eq!(plan.game_args[username + 1], "Steve");
+        // Y no queda ningún placeholder sin sustituir.
+        assert!(!plan.game_args.concat().contains("${"));
     }
 
     #[test]

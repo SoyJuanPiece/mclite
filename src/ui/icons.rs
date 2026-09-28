@@ -1,7 +1,7 @@
 //! Carga de iconos para la UI, decodificados en local.
 //!
 //! `egui::Image::from_uri` delega en el loader HTTP de egui_extras y ahí se
-//! quedaba en triángulo rojo con los .webp de Modrinth. Este módulo baja el
+//! quedaba en triángulo rojo con los .webp remotos. Este módulo baja el
 //! icono a la caché de disco (`core::icons`), lo decodifica con la crate
 //! `image` (png/webp/jpg) y lo sirve como `TextureHandle` cacheada por URL.
 //!
@@ -43,7 +43,7 @@ pub fn texture_for_url(ui: &egui::Ui, paths: &Paths, url: &str) -> Option<Textur
         }
     }
     // No está en caché: baja en un hilo de fondo UNA vez (guardia en temp para
-    // no reventar a Modrinth con un spawn por frame) y la próxima pasada
+    // no lanzar un spawn por frame) y la próxima pasada
     // entrará por el fichero de arriba.
     let guard = egui::Id::new(format!("icon-dl:{url}"));
     let already = ui
@@ -62,49 +62,9 @@ pub fn texture_for_url(ui: &egui::Ui, paths: &Paths, url: &str) -> Option<Textur
     None
 }
 
-/// Quita emojis, símbolos de bloques y texto CJK que la fuente Inter no tiene
-/// (se ven como cuadritos □ en las descripciones de Modrinth; hay packs cuyo
-/// texto viene en chino/coreano/japonés o con arte ASCII de bloques).
-pub fn strip_emojis(text: &str) -> String {
-    text.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            !(code >= 0x1F000)                   // emojis y símbolos nuevos
-                && !(0x2600..=0x27BF).contains(&code) // misc symbols + dingbats
-                && !(0xFE00..=0xFE0F).contains(&code) // variation selectors
-                && !(0x1F1E6..=0x1F1FF).contains(&code) // banderas
-                && !(0x2500..=0x25FF).contains(&code) // bloques/box-drawing (▃ █ ▶)
-                && !(0x2E80..=0x9FFF).contains(&code) // CJK: radicales, kana, chino
-                && !(0xAC00..=0xD7AF).contains(&code) // hangul (coreano)
-                && !(0xF900..=0xFAFF).contains(&code) // CJK compatibilidad
-                && !(0xFF00..=0xFFEF).contains(&code) // fullwidth/halfwidth (？！)
-                && *c != '\u{200D}'              // zero-width joiner
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn quita_emojis_pero_deja_texto_normal() {
-        assert_eq!(strip_emojis("Hola ▃ 100 Days 🔥 mundo"), "Hola  100 Days  mundo");
-        assert_eq!(strip_emojis("Battle Armory ⚔️ TACZ"), "Battle Armory  TACZ");
-        assert_eq!(strip_emojis("400+ mods"), "400+ mods");
-        // Conserva acentos y caracteres latinos.
-        assert_eq!(strip_emojis("configuración ✅ rápida"), "configuración  rápida");
-    }
-
-    #[test]
-    fn quita_cjk_y_fullwidth_que_inter_no_tiene() {
-        // Coreano + chino (packs cuyo texto no viene en latino).
-        assert_eq!(strip_emojis("좀비 아포칼립스 中文 texto").trim(), "texto");
-        // Signo de interrogación fullwidth (BattleArmory TACZ).
-        assert_eq!(strip_emojis("？BattleArmory"), "BattleArmory");
-        // El raya em — (0x2014) y el texto normal se conservan.
-        assert_eq!(strip_emojis("a — b"), "a — b");
-    }
 
     #[test]
     fn decodifica_un_png_pequeno() {

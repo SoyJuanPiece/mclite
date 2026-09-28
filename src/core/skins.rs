@@ -57,13 +57,13 @@ pub fn fetch_premium(http: &HttpClient, nick: &str) -> Option<Vec<u8>> {
     // 1) UUID del perfil premium.
     let profile_url = format!("https://api.mojang.com/users/profiles/minecraft/{nick}");
     let profile: serde_json::Value =
-        serde_json::from_str(&http.get_string_ua(&profile_url, crate::core::modrinth::USER_AGENT).ok()?).ok()?;
+        serde_json::from_str(&http.get_string_ua(&profile_url, crate::core::http::USER_AGENT).ok()?).ok()?;
     let id = profile["id"].as_str()?;
 
     // 2) Texturas firmadas del session server.
     let session_url = format!("https://sessionserver.mojang.com/session/minecraft/profile/{id}");
     let session: serde_json::Value =
-        serde_json::from_str(&http.get_string_ua(&session_url, crate::core::modrinth::USER_AGENT).ok()?).ok()?;
+        serde_json::from_str(&http.get_string_ua(&session_url, crate::core::http::USER_AGENT).ok()?).ok()?;
     let textures_b64 = session["properties"]
         .as_array()?
         .iter()

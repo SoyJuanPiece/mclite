@@ -11,7 +11,9 @@
 //!    `optifine/Patcher.class`). El OptiFine moderno (1.17+) **no** trae `Patcher.class`:
 //!    el jar del instalador se usa tal cual como librería.
 //! 3. Generar el manifiesto: mainClass `net.minecraft.launchwrapper.Launch`,
-//!    `--tweakClass optifine.OptiFineTweaker`, librería OptiFine + launchwrapper.
+//!    librería OptiFine + launchwrapper, y el `--tweakClass` donde lo espera el
+//!    formato del manifiesto vanilla: en `minecraftArguments` (< 1.13) o en
+//!    `arguments.game` (1.13+), igual que hace el instalador oficial.
 
 use std::path::{Path, PathBuf};
 
@@ -88,6 +90,41 @@ impl OptiFineLoader {
             extract: None,
             local_only: true,
         }
+    }
+
+    /// Dónde va el `--tweakClass`, según el formato del manifiesto vanilla:
+    ///
+    /// * < 1.13 (solo `minecraftArguments`): al final de ESA cadena, como hace el
+    ///   instalador oficial. Si fuera en `arguments.game`, el launcher no expandiría
+    ///   la cadena del padre (con `arguments` presente la ignora) y el juego
+    ///   arrancaba sin `--assetsDir` ni usuario: NPE dentro de
+    ///   `OptiFineTweaker.acceptOptions` (OptiFine 1.8.9, mclite 0.9.4).
+    /// * 1.13+ (`arguments`): como argumento de juego moderno.
+    fn tweak_args(parent: &VersionJson) -> (Option<String>, Arguments) {
+        let modern = parent
+            .arguments
+            .as_ref()
+            .is_some_and(|args| !args.game.is_empty());
+        if modern {
+            return (
+                None,
+                Arguments {
+                    game: vec![
+                        ArgValue::Plain("--tweakClass".into()),
+                        ArgValue::Plain("optifine.OptiFineTweaker".into()),
+                    ],
+                    jvm: Vec::new(),
+                },
+            );
+        }
+        let mut legacy = parent.minecraft_arguments.clone().unwrap_or_default();
+        if !legacy.contains("optifine.OptiFineTweaker") {
+            if !legacy.trim().is_empty() {
+                legacy.push(' ');
+            }
+            legacy.push_str("--tweakClass optifine.OptiFineTweaker");
+        }
+        (Some(legacy), Arguments::default())
     }
 
     /// Ejecuta el Patcher de OptiFine (solo OptiFine clásico).
@@ -341,17 +378,17 @@ impl Loader for OptiFineLoader {
             });
         }
 
-        let arguments = Arguments {
-            game: vec![ArgValue::Plain("--tweakClass".into()), ArgValue::Plain("optifine.OptiFineTweaker".into())],
-            jvm: Vec::new(),
-        };
+        // El tweakClass va a `minecraftArguments` (< 1.13) o a `arguments.game`
+        // (1.13+) según el formato del padre. Ver `tweak_args`.
+        let (minecraft_arguments, arguments) = Self::tweak_args(&parent);
 
         let child = VersionJson {
             id: version_id.to_string(),
             inherits_from: Some(mc.to_string()),
             main_class: "net.minecraft.launchwrapper.Launch".into(),
             libraries,
-            arguments: Some(arguments),
+            arguments: if arguments.game.is_empty() { None } else { Some(arguments) },
+            minecraft_arguments,
             version_type: Some("release".into()),
             ..VersionJson::default()
         };
@@ -494,6 +531,54 @@ mod tests {
         let lw = OptiFineLoader::launchwrapper_library("2.0");
         assert_eq!(lw.name, "optifine:launchwrapper-of:2.0");
         assert!(lw.local_only);
+    }
+
+    #[test]
+    fn el_tweakclass_va_al_minecraft_arguments_en_versiones_antiguas() {
+        // Forma real del manifiesto 1.8.9: solo `minecraftArguments`, sin `arguments`.
+        let parent = VersionJson::from_str(
+            r#"{"id":"1.8.9","mainClass":"net.minecraft.client.main.Main",
+                "minecraftArguments":"--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name}"}"#,
+        )
+        .unwrap();
+
+        let (legacy, modern) = OptiFineLoader::tweak_args(&parent);
+        let legacy = legacy.expect("formato antiguo: tweakClass en minecraftArguments");
+        assert!(legacy.ends_with("--tweakClass optifine.OptiFineTweaker"), "{legacy}");
+        // Y conserva TODOS los argumentos del padre (el NPE de 0.9.4 fue
+        // exactamente perderlos).
+        assert!(legacy.contains("--username ${auth_player_name}"));
+        assert!(legacy.contains("--assetsDir ${assets_root}"));
+        assert!(modern.game.is_empty());
+    }
+
+    #[test]
+    fn el_tweakclass_va_en_arguments_en_versiones_modernas() {
+        let parent = VersionJson::from_str(
+            r#"{"id":"1.21.4","mainClass":"net.minecraft.client.main.Main",
+                "arguments":{"game":["--username", "${auth_player_name}"],"jvm":["-cp", "${classpath}"]}}"#,
+        )
+        .unwrap();
+
+        let (legacy, modern) = OptiFineLoader::tweak_args(&parent);
+        assert!(legacy.is_none());
+        let expanded: Vec<String> = modern
+            .game
+            .iter()
+            .flat_map(|arg| arg.expand(&crate::core::rules::Environment::current(), &crate::core::rules::Features::default()))
+            .collect();
+        assert_eq!(expanded, vec!["--tweakClass", "optifine.OptiFineTweaker"]);
+    }
+
+    #[test]
+    fn no_duplica_el_tweakclass_si_el_padre_ya_lo_trae() {
+        let parent = VersionJson::from_str(
+            r#"{"id":"1.8.9","mainClass":"X",
+                "minecraftArguments":"--username ${auth_player_name} --tweakClass optifine.OptiFineTweaker"}"#,
+        )
+        .unwrap();
+        let (legacy, _) = OptiFineLoader::tweak_args(&parent);
+        assert_eq!(legacy.unwrap().matches("OptiFineTweaker").count(), 1);
     }
 
     #[test]

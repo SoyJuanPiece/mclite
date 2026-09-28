@@ -42,7 +42,7 @@ struct GhAsset {
 /// Consulta el último release. `None` si no hay red, GitHub cae, o el release
 /// no trae el par `mclite.exe` + `mclite.exe.sha256` (releases antiguos).
 pub fn latest_release(http: &HttpClient) -> Option<ReleaseInfo> {
-    let body = http.get_string_ua(RELEASES_API, crate::core::modrinth::USER_AGENT).ok()?;
+    let body = http.get_string_ua(RELEASES_API, crate::core::http::USER_AGENT).ok()?;
     let release: GhRelease = serde_json::from_str(&body).ok()?;
     let version = release.tag_name.strip_prefix('v')?.to_string();
     let find = |suffix: &str| {
