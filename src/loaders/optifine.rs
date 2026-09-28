@@ -36,6 +36,38 @@ struct BmclEntry {
     #[serde(rename = "type")]
     kind: String,
     patch: String,
+    /// Id de Mongo del registro de BMCLAPI: los primeros bytes son el timestamp de
+    /// creación, así que ordenar por él es ordenar por antigüedad real (BMCLAPI no
+    /// trae fecha y el orden de la lista a veces mete series viejas primero).
+    #[serde(default)]
+    id: String,
+    /// `OptiFine_1.20.1_HD_U_I6.jar` o `preview_OptiFine_…_I7_pre12.jar`.
+    #[serde(default)]
+    filename: String,
+}
+
+/// Orden canónico de la lista: builds finales primero (más nuevo delante, por
+/// timestamp del `_id` de Mongo) y previews al final. «La última» del default de
+/// la UI es la primera de esta lista.
+fn ordena_bmcl(entries: &mut [BmclEntry]) {
+    entries.sort_by(|a, b| {
+        a.es_preview()
+            .cmp(&b.es_preview())
+            .then(b.crono().cmp(&a.crono()))
+    });
+}
+
+impl BmclEntry {
+    /// ¿Es un build de prueba? Van con `preview_` en el fichero y patch `preN`.
+    fn es_preview(&self) -> bool {
+        self.filename.starts_with("preview_") || self.patch.starts_with("pre")
+    }
+
+    /// Antigüedad del build: el timestamp Mongo (primeros 8 hex del `_id`).
+    /// Mayor = más nuevo. 0 si el id no es como se espera (queda el último).
+    fn crono(&self) -> u64 {
+        u64::from_str_radix(self.id.get(..8).unwrap_or("0"), 16).unwrap_or(0)
+    }
 }
 
 impl OptiFineLoader {
@@ -269,11 +301,15 @@ impl Loader for OptiFineLoader {
                 "OptiFine no tiene versiones para Minecraft {mc}.{suggestion}"
             )));
         }
+        // El orden que devuelve BMCLAPI NO vale: a veces pone series viejas antes
+        // que las nuevas (en 1.20.1 la lista abre con I5 siendo I6 el último
+        // build) y las previews van mezcladas.
+        ordena_bmcl(&mut entries);
         Ok(entries
             .into_iter()
             .map(|entry| LoaderVersion {
                 id: format!("{}_{}", entry.kind, entry.patch),
-                stable: true,
+                stable: !entry.es_preview(),
                 mc: mc.to_string(),
             })
             .collect())
@@ -470,7 +506,7 @@ fn write_supported_cache(paths: &Paths, supported: &[String]) {
     }
 }
 
-/// La versión estable más reciente que tiene builds de OptiFine, para sugerirla
+/// La versión de Minecraft más reciente que tiene builds de OptiFine, para sugerirla
 /// cuando el usuario elige una que no tiene.
 fn newest_optifine_mc(http: &HttpClient, paths: &Paths) -> Option<String> {
     let manifest = install::cached_manifest_of(http, paths)?;
@@ -591,5 +627,50 @@ mod tests {
         let (kind, patch) = "HD_U_H9_pre1".rsplit_once('_').unwrap();
         assert_eq!(kind, "HD_U_H9");
         assert_eq!(patch, "pre1");
+    }
+
+    /// Como BMCLAPI ordena por defecto: finales primero, previews después, y las
+    /// finales a veces con la serie vieja delante (caso real de 1.20.1).
+    fn entry(kind: &str, patch: &str, id: &str, filename: &str) -> BmclEntry {
+        BmclEntry {
+            kind: kind.into(),
+            patch: patch.into(),
+            id: id.into(),
+            filename: filename.into(),
+        }
+    }
+
+    #[test]
+    fn la_ultima_va_primero_y_las_previews_al_final() {
+        let mut entries = vec![
+            // Caso real de 1.20.1: BMCLAPI lista I5 primero aunque I6 es más nuevo
+            // (su _id es posterior), y las previews van por el medio.
+            entry("HD_U", "I5", "64a9a422", "OptiFine_1.20.1_HD_U_I5.jar"),
+            entry("HD_U", "I6", "65847d24", "OptiFine_1.20.1_HD_U_I6.jar"),
+            entry("HD_U_I6", "pre4", "64933aa2", "preview_OptiFine_1.20.1_HD_U_I6_pre4.jar"),
+        ];
+        ordena_bmcl(&mut entries);
+        let ids: Vec<String> = entries
+            .iter()
+            .map(|e| format!("{}_{}", e.kind, e.patch))
+            .collect();
+        assert_eq!(ids, vec!["HD_U_I6", "HD_U_I5", "HD_U_I6_pre4"]);
+        // Y el marcado de estabilidad: solo la preview es inestable.
+        assert!(!entries[0].es_preview() && !entries[1].es_preview());
+        assert!(entries[2].es_preview());
+    }
+
+    #[test]
+    fn detecta_las_previews_por_filename() {
+        assert!(entry("HD_U", "pre4", "aa", "preview_OptiFine_1.20.1_HD_U_I6_pre4.jar").es_preview());
+        assert!(entry("HD_U_I6", "pre4", "aa", "").es_preview());
+        assert!(!entry("HD_U", "I6", "aa", "OptiFine_1.20.1_HD_U_I6.jar").es_preview());
+    }
+
+    #[test]
+    fn el_id_mongo_es_cronologico() {
+        // Los primeros 8 hex del _id son segundos desde la época.
+        assert_eq!(entry("HD_U", "I6", "65847d24", "").crono(), 0x65847d24);
+        assert_eq!(entry("HD_U", "I6", "zorro", "").crono(), 0); // id raro → 0
     }
 }

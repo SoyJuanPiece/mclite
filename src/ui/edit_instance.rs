@@ -94,7 +94,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             let loader_hint = if app.form.loader == LoaderKind::Vanilla {
                 "Vanilla".to_string()
             } else if app.form.loader_version.is_empty() {
-                format!("{}, última estable", app.form.loader.label())
+                format!("{}, la última", app.form.loader.label())
             } else {
                 format!("{}, {}", app.form.loader.label(), app.form.loader_version)
             };
@@ -113,8 +113,15 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             if app.form.loader != LoaderKind::Vanilla {
                 ui.add_space(6.0);
                 theme::form_row(ui, "Versión del cargador", |ui| {
+                    // OptiFine: «la última» build final (NO la «estable» de
+                    // OptiFine, que da errores con algunos shaders).
+                    let default_label = if app.form.loader == LoaderKind::OptiFine {
+                        "La última (recomendada)"
+                    } else {
+                        "Última estable"
+                    };
                     let selected = if app.form.loader_version.is_empty() {
-                        "Última estable".to_string()
+                        default_label.to_string()
                     } else {
                         app.form.loader_version.clone()
                     };
@@ -124,7 +131,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                             ui.selectable_value(
                                 &mut app.form.loader_version,
                                 String::new(),
-                                "Última estable",
+                                default_label,
                             );
                             for (id, stable) in &loader_versions {
                                 let label = if *stable {

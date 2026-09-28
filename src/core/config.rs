@@ -65,6 +65,11 @@ pub struct LauncherConfig {
     /// Avisar de versiones nuevas consultando GitHub al arrancar.
     #[serde(default = "default_true")]
     pub check_updates: bool,
+    /// Migración 0.9.6 ya hecha: las instancias OptiFine creadas antes guardaban
+    /// como «última estable» la primera entrada de BMCLAPI (a veces una serie
+    /// vieja). Una única vez se reinstallan con la última de verdad.
+    #[serde(default)]
+    pub optifine_migrated: bool,
 }
 
 /// Tamaño de ventana guardado entre sesiones.
@@ -112,6 +117,7 @@ impl Default for LauncherConfig {
             window: None,
             accent: None,
             check_updates: true,
+            optifine_migrated: false,
         }
     }
 }

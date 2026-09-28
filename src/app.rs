@@ -70,6 +70,9 @@ enum Message {
     /// Un modpack (.mrpack arrastrado) terminó de instalarse: recargar el índice
     /// de instancias (se creó en el hilo de fondo) y seleccionar la nueva.
     PackInstalled(String),
+    /// Migración OptiFine: la última build de verdad para una instancia (None si
+    /// no se pudo consultar o no hay).
+    MigrateOptifine { slug: String, latest: Option<String> },
     Failed(String),
     /// El juego terminó (bien o mal): la UI muestra la causa y el log guardado.
     GameExit(crash::GameExit),
@@ -820,6 +823,7 @@ impl McLiteApp {
         app.load_manifest();
         updater::cleanup_old(app.config.keep_old_secs);
         app.check_for_update();
+        app.migrate_optifine_to_latest();
         app
     }
 
@@ -928,6 +932,43 @@ impl McLiteApp {
                 self.job = None;
                 self.status = status.clone();
                 self.notify(status, ToastKind::Ok);
+            }
+            Message::MigrateOptifine { slug, latest } => {
+                // La versión a mano del usuario no se toca; solo si difiere de la
+                // última de verdad se reinstalla (mods y mundos se quedan).
+                let Some(instance) = self.store.find(&slug) else {
+                    return;
+                };
+                let current = instance.loader_version.clone().unwrap_or_default();
+                let Some(latest) = latest.filter(|value| *value != current) else {
+                    logging::info(&format!(
+                        "migración OptiFine: {slug} ya tenía la última ({current})"
+                    ));
+                    return;
+                };
+                let name = instance.name.clone();
+                let mc = instance.mc_version.clone();
+                if self.job.is_some() {
+                    // Hay otra instalación en curso: no se puede encolar, la
+                    // dejamos como está (el usuario puede reinstalar a mano).
+                    logging::warn(&format!(
+                        "migración OptiFine: {slug} pendiente, había un trabajo en curso"
+                    ));
+                    return;
+                }
+                self.status = format!("OptiFine {current} → {latest} en «{name}»");
+                self.notify(
+                    format!("OptiFine actualizado a {latest} (la última)",),
+                    ToastKind::Ok,
+                );
+                self.start_install(
+                    format!("OptiFine {latest}: {name}"),
+                    LoaderKind::OptiFine,
+                    mc,
+                    Some(latest),
+                    slug,
+                    false,
+                );
             }
             Message::PackInstalled(slug) => {
                 self.job = None;
@@ -1335,6 +1376,8 @@ impl McLiteApp {
         if self.form.loader_loading {
             return Err("Espera a que carguen las versiones del cargador.".to_string());
         }
+        // «La última»: primera build final de la lista (el propio cargador ya la
+        // ordena más nuevo primero y aparta las previews al final).
         let chosen = self
             .form
             .loader_versions
@@ -1349,6 +1392,59 @@ impl McLiteApp {
                 )
             })?;
         Ok(Some(chosen.id.clone()))
+    }
+
+    /// Migración 0.9.6: hasta ahora «la última» de OptiFine era la primera entrada
+    /// de BMCLAPI, que a veces es una serie vieja (en 1.20.1 instalaba I5 existiendo
+    /// I6) y las previews iban mezcladas como estables. Una única vez, se consulta
+    /// BMCLAPI y las instancias que no tengan la última de verdad se reinstallan.
+    /// Las que el usuario eligió a mano no se tocan.
+    fn migrate_optifine_to_latest(&mut self) {
+        if self.config.optifine_migrated {
+            return;
+        }
+        // Marca YA: si el proceso muere a mitad, no se reintenta (peor sería
+        // reinstallar en cada arranque).
+        self.config.optifine_migrated = true;
+        if self.config.save(&self.paths).is_err() {
+            return;
+        }
+        let targets: Vec<(String, String)> = self
+            .store
+            .instances
+            .iter()
+            .filter(|instance| instance.loader == LoaderKind::OptiFine)
+            .map(|instance| (instance.slug.clone(), instance.mc_version.clone()))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        logging::info(&format!(
+            "migración OptiFine: comprobando {} instancia(s)",
+            targets.len()
+        ));
+        let tx = self.tx.clone();
+        let paths = self.paths.clone();
+        let filter = self.config.version_filter();
+        std::thread::spawn(move || {
+            let http = HttpClient::new();
+            let progress = Progress::new(GuiSink::new(tx.clone()));
+            let ctx = loaders::LoaderCtx {
+                http: &http,
+                paths: &paths,
+                progress: &progress,
+                filter,
+            };
+            let loader = loaders::get(LoaderKind::OptiFine);
+            for (slug, mc) in targets {
+                let latest = loader
+                    .list_versions(&ctx, &mc)
+                    .ok()
+                    .and_then(|versions| versions.into_iter().find(|v| v.stable))
+                    .map(|v| v.id);
+                tx.send(Message::MigrateOptifine { slug, latest });
+            }
+        });
     }
 
     // ── Trabajos ─────────────────────────────────────────────────────────────

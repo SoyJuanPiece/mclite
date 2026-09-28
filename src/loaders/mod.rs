@@ -83,7 +83,7 @@ impl LoaderKind {
             LoaderKind::Forge => Some("La primera instalación ejecuta el instalador oficial de Forge; tarda un poco más."),
             LoaderKind::NeoForge => Some("Solo existe desde Minecraft 1.20.2."),
             LoaderKind::OptiFine => {
-                Some("OptiFine es un parche del client jar. Con Fabric se usa OptiFabric o Sodium.")
+                Some("OptiFine es un parche del client jar. Con Fabric se usa OptiFabric o Sodium. «La última» elige el build final más nuevo: si algún shader te da problemas, prueba la «estable» de la lista.")
             }
         }
     }
