@@ -1,6 +1,6 @@
 [package]
 name = "mclite"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 description = "Launcher lite de Minecraft para Windows (nativo, sin runtime)"
 authors = ["Juan Vivenes"]
@@ -41,8 +41,8 @@ wgpu = { version = "25", default-features = false, features = [
     "gles",
     "wgsl",
 ] }
-# Los iconos de Modrinth se cargan por URL: `http` los descarga (ehttp) y
-# `image` los decodifica. La mayoría de iconos de Modrinth son WEBP (verificado
+# Los iconos remotos se cargan por URL: `http` los descarga (ehttp) y
+# `image` los decodifica. La mayoría de iconos de packs son WEBP (verificado
 # en la API), así que hay que activar también `webp`; y `png`/`jpeg` vienen
 # incluidos por defecto en el crate image de egui_extras.
 egui_extras = { version = "0.32", default-features = false, features = ["image", "http", "webp"] }

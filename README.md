@@ -2,7 +2,7 @@
 
 **Launcher ligero de Minecraft para Windows.** Un solo `.exe` portable, sin instalador, sin .NET y sin Java preinstalado: lo baja solo cuando hace falta.
 
-![Versión](https://img.shields.io/badge/versi%C3%B3n-0.9.4-green) ![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
+![Versión](https://img.shields.io/badge/versi%C3%B3n-0.9.5-green) ![Estado](https://img.shields.io/badge/estado-beta-orange) ![Plataforma](https://img.shields.io/badge/plataforma-Windows%20x64-blue) ![Licencia](https://img.shields.io/badge/licencia-propietaria-red)
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|
 | 🪟 **Portable de verdad** | Un ejecutable. La configuración vive en una carpeta `mclite/` junto al exe (o `%APPDATA%\mclite` si la carpeta no es escribible). |
 | 🧩 **6 cargadores** | Vanilla, Fabric, Quilt, Forge, NeoForge y OptiFine. |
-| 📦 **Modpacks de Modrinth** | Búsqueda con iconos, detalle e instalación de `.mrpack` en una instancia nueva. También arrastra un `.mrpack` a la ventana. |
+| 📦 **Modpacks `.mrpack`** | Instala un modpack arrastrando su `.mrpack` a la ventana. |
 | ☕ **Java automático** | Usa el del sistema si sirve; si no, baja el runtime oficial de Mojang. Nada que instalar. |
 | ⚡ **Sodium a un clic** | Para instancias Fabric (y casilla al crear). |
 | 👤 **Dos tipos de cuenta** | Offline con nick local, o **cuenta Microsoft real** por device code (nombre, UUID y skin de Mojang). |
@@ -68,7 +68,7 @@ mclite/
 │   ├── config.json
 │   ├── instances.json
 │   ├── instances/<slug>/ ← cada instancia (game dir)
-│   ├── cache/icons/      ← iconos de Modrinth
+│   ├── cache/icons/      ← iconos de packs
 │   ├── cache/skins/      ← skins offline
 │   └── backups/          ← copias .zip exportadas
 └── logs/launcher.log
