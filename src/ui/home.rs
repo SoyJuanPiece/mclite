@@ -309,6 +309,7 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     let confirm = app.confirm_delete.as_deref() == Some(slug);
     let mut action: Option<Action> = None;
     let mut open_dir = false;
+    let mut open_logs_dir = false;
     let mut open_log: Option<std::path::PathBuf> = None;
     let mut open_shots = false;
     let nick = app.config.username_or_default();
@@ -601,7 +602,7 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         }
     }
 
-    // ── Aviso de crash de la última partida ─────────────────────────────────
+    // ── Aviso de crash de la última partida ─────────────────────────
     if let Some(exit) = &app.last_game_exit {
         if !exit.ok {
             ui.add_space(6.0);
@@ -618,14 +619,33 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
                         ))
                         .color(theme::DANGER),
                     );
+                    // Lo relevante de una sesión de juego vive en tres sitios:
+                    // el espejo propio (logs/crash/), el gameDir (latest.log,
+                    // hs_err de la JVM, crash report de Mojang) y la carpeta
+                    // de sesión. Los botones van del más cercano al más general.
                     ui.horizontal(|ui| {
-                        if theme::ghost_button(ui, "Ver log del juego").clicked() {
+                        if theme::ghost_button(ui, "Log del juego").clicked() {
                             open_log = Some(exit.log_path.clone());
                         }
+                        if let Some(latest) = &exit.game_latest_log {
+                            if theme::ghost_button(ui, "latest.log (Minecraft)").clicked() {
+                                open_log = Some(latest.clone());
+                            }
+                        }
+                        if let Some(jvm) = &exit.jvm_log {
+                            if theme::ghost_button(ui, "Log JVM (shaders/driver)").clicked() {
+                                open_log = Some(jvm.clone());
+                            }
+                        }
                         if let Some(report) = &exit.crash_report {
-                            if theme::ghost_button(ui, "Abrir crash report").clicked() {
+                            if theme::ghost_button(ui, "Crash report").clicked() {
                                 open_log = Some(report.clone());
                             }
+                        }
+                        // Toda la sesión: mirrors, dumps y lo que el juego haya
+                        // escrito en su carpeta.
+                        if theme::ghost_button(ui, "Carpeta logs/crash").clicked() {
+                            open_logs_dir = true;
                         }
                     });
                 });
@@ -675,6 +695,12 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| app.paths.logs());
+        if let Err(err) = crate::core::shell::open_in_explorer(&dir) {
+            app.error = Some(err.to_string());
+        }
+    }
+    if open_logs_dir {
+        let dir = app.paths.logs().join("crash");
         if let Err(err) = crate::core::shell::open_in_explorer(&dir) {
             app.error = Some(err.to_string());
         }

@@ -496,7 +496,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     }
                 });
                 ui.label(theme::muted(
-                    "launcher.log = arranque del launcher · crash/ = salida de cada partida",
+                    "launcher.log = arranque del launcher · crash/ = un log por partida (FECHA_HORA_instancia__OK|CRASH.log); un crash también deja su rastro en la instancia: crash-reports/, logs/latest.log y hs_err_pid*.log de la JVM",
                 ));
             });
             if toggled {

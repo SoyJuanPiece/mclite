@@ -1647,6 +1647,9 @@ impl McLiteApp {
                     mirror.write_line(&format!("error al preparar: {err}"));
                     logging::error(&format!("fallo al preparar el lanzamiento: {err}"));
                     tx.send(Message::Failed(err.to_string()));
+                    // Sesión fallida: el espejo se cierra con __CRASH para que no
+                    // quede provisional ni se mezcle con las sesiones OK.
+                    let _ = mirror.finish(false);
                     return;
                 }
             };
@@ -1670,6 +1673,7 @@ impl McLiteApp {
                     mirror.write_line(&format!("error al arrancar: {err}"));
                     logging::error(&format!("no pudo arrancar el juego: {err}"));
                     tx.send(Message::Failed(err.to_string()));
+                    let _ = mirror.finish(false);
                     return;
                 }
             };
@@ -1698,8 +1702,9 @@ impl McLiteApp {
                 Some(cause) => format!("── fin: {cause} ──"),
                 None => format!("── fin: ok, código {} ──", result.code),
             });
-            let log_path = mirror.finish();
-            let result = crash::GameExit { log_path, ..result };
+            // El log se cierra con su nombre final (…__OK.log / …__CRASH.log) y se
+            // poda la carpeta. Los ficheros del gameDir (crash report, hs_err de la
+            // JVM, latest.log) ya los recogió classify() con el proceso recién muerto.
             logging::info(&format!(
                 "el juego terminó: ok={} código={}",
                 result.ok, result.code
