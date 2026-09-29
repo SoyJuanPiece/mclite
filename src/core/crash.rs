@@ -1,47 +1,61 @@
-//! Captura de crashes del juego (`logs/crash/`).
+//! Logs de sesión del juego, crashes y mods.
 //!
-//! Cada partida deja UN log con nombre legible:
-//! `logs/crash/2026-09-28_184512_mi-instancia__CRASH.log` (o `__OK.log`). La hora es
-//! local (España peninsular, UTC+2) y es la del ARRANQUE de la sesión: coincide con
-//! lo que vio el usuario en el reloj, no con cuándo terminó la partida.
+//! El launcher separa a propósito tres cosas que se depuran de forma distinta,
+//! cada una en su carpeta dentro de `logs/`:
 //!
-//! A la hora de depurar un crash conviene todo lo que haya caído en disco, así que
-//! `GameExit` recoge además (si es de esta partida):
-//! * `crash-reports/crash-*.txt` del gameDir — el crash report de Mojang;
-//! * `hs_err_pid*.log` del gameDir — lo único que deja la JVM cuando muere sin
-//!   reporte de Mojang (típico de shaders/drivers: el juego se mata a sí mismo y no
-//!   hay stack de Java que analizable);
-//! * `logs/latest.log` del gameDir — el log que escribe el propio Minecraft.
+//! ```text
+//! logs/
+//! ├── launcher.log                          lo que hace McLite (core/logging.rs)
+//! ├── game/<instancia>/<fecha>__OK.log      la sesión completa, salga bien o mal
+//! ├── game/<instancia>/<fecha>__CRASH.log
+//! ├── mods/<instancia>/<fecha>.log          solo lo de mods (lista + líneas)
+//! └── crash/<instancia>/<fecha>/            expediente autocontenido del fallo
+//!     ├── resumen.txt                      cabecera legible: causa, versión, rutas
+//!     ├── sesion.log                       copia de la sesión completa
+//!     ├── mods.log                         copia del log de mods
+//!     ├── minecraft-crash-report.txt       el reporte oficial de Mojang
+//!     ├── minecraft-latest.log             logs/latest.log que escribe el juego
+//!     └── jvm-hs-err.log                   el `hs_err_pid*.log` de la JVM
+//! ```
 //!
-//! Podas: en `logs/crash/` viven las últimas `KEEP_GAME_LOGS` sesiones de cada tipo
-//! (OK y CRASH se cuentan por separado), para que la carpeta no crezca sin fin.
+//! La idea del expediente es que se pueda enviar TAL CUAL (comprimido) a quien
+//! te vaya a ayudar: no hay que ir a buscar ficheros sueltos por el gameDir.
+//!
+//! Podas: `game/` y `mods/` guardan las últimas `KEEP_GAME_LOGS` sesiones de
+//! cada tipo (OK y CRASH por separado) y `crash/` los últimos
+//! `KEEP_CRASH_BUNDLES` expedientes, para que la carpeta no crezca sin fin.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::core::paths::Paths;
+use crate::core::paths::{sanitize, Paths};
 
 /// ¿Cuántos logs de sesiones pasadas se conservan? (OK y CRASH se podan por separado.)
 const KEEP_GAME_LOGS: usize = 40;
+/// ¿Cuántos expedientes de crash se conservan por instancia?
+const KEEP_CRASH_BUNDLES: usize = 20;
 
 /// Espejo de la salida del juego: recibe las mismas líneas que la UI y las escribe
-/// a `logs/crash/<fecha>_<hora>_<instancia>__OK|CRASH.log`. Devuelve la ruta del log escrito.
+/// a `logs/game/<instancia>/<fecha>.log`. Al cerrar, `finish` lo renombra con el
+/// sufijo `__OK` o `__CRASH`.
 pub struct GameLogMirror {
     file: Option<std::fs::File>,
     path: PathBuf,
+    /// Marca temporal (`2026-09-28_184512`) que comparte con el expediente de crash.
+    stamp: String,
+    /// Instancia a la que pertenece la sesión.
+    slug: String,
 }
 
 impl GameLogMirror {
     /// Crea el espejo. Fallo tolerable: si no se puede escribir, la UI sigue
     /// mostrando el log en vivo.
     pub fn new(paths: &Paths, instance_slug: &str) -> Self {
-        let dir = paths.logs().join("crash");
-        let path = dir.join(format!(
-            "{}_{}.log",
-            stamp(SystemTime::now()),
-            crate::core::paths::sanitize(instance_slug)
-        ));
+        let slug = sanitize(instance_slug);
+        let dir = paths.game_logs(&slug);
+        let stamp = stamp(SystemTime::now());
+        let path = dir.join(format!("{stamp}_{slug}.log"));
         let file = std::fs::create_dir_all(&dir)
             .ok()
             .and_then(|()| {
@@ -51,11 +65,27 @@ impl GameLogMirror {
                     .open(&path)
                     .ok()
             });
-        Self { file, path }
+        Self {
+            file,
+            path,
+            stamp,
+            slug,
+        }
     }
 
+    /// Ruta provisional del log en curso.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Marca temporal de la sesión (la comparten el log y el expediente de crash).
+    pub fn stamp(&self) -> &str {
+        &self.stamp
+    }
+
+    /// Instancia de la sesión (ya saneada).
+    pub fn slug(&self) -> &str {
+        &self.slug
     }
 
     /// Escribe una línea del juego al espejo. Pública: el llamador decide qué
@@ -67,7 +97,8 @@ impl GameLogMirror {
     }
 
     /// Cierra el fichero, lo renombra a su nombre final (`...__OK.log` o
-    /// `...__CRASH.log`) y poda los logs antiguos. Devuelve la ruta final.
+    /// `...__CRASH.log`) y poda las sesiones antiguas de esta instancia.
+    /// Devuelve la ruta final.
     pub fn finish(mut self, ok: bool) -> PathBuf {
         self.file = None;
         let final_path = con_sufijo(&self.path, if ok { "__OK.log" } else { "__CRASH.log" });
@@ -75,7 +106,7 @@ impl GameLogMirror {
         let final_path = std::fs::rename(&self.path, &final_path)
             .map(|()| final_path)
             .unwrap_or_else(|_| self.path.clone());
-        prune(self.path.parent().unwrap_or(Path::new(".")));
+        prune_session_dir(final_path.parent().unwrap_or(Path::new(".")));
         final_path
     }
 }
@@ -87,8 +118,14 @@ pub struct GameExit {
     pub code: i32,
     /// Causa probable si `!ok` (del crash report o de la salida del juego).
     pub cause: Option<String>,
-    /// Log completo espejado, para el botón «Abrir log».
-    pub log_path: PathBuf,
+    /// Sesión completa: `logs/game/<instancia>/<fecha>__OK|__CRASH.log`.
+    pub session_log: PathBuf,
+    /// Expediente del crash (`logs/crash/<instancia>/<fecha>/`) si falló.
+    pub crash_dir: Option<PathBuf>,
+    /// `resumen.txt` dentro del expediente (lo que se lee primero).
+    pub summary: Option<PathBuf>,
+    /// Log de mods de la sesión (`logs/mods/<instancia>/<fecha>.log`).
+    pub mod_log: Option<PathBuf>,
     /// Crash report oficial de Mojang si lo hubo (`crash-reports/` del gameDir).
     pub crash_report: Option<PathBuf>,
     /// Log nativo de la JVM (`hs_err_pid*.log`) si lo hubo: es lo que queda cuando
@@ -98,14 +135,47 @@ pub struct GameExit {
     pub game_latest_log: Option<PathBuf>,
 }
 
+impl GameExit {
+    /// Carpeta donde vive todo lo de esta sesión (para el botón «Abrir carpeta»).
+    pub fn folder(&self) -> PathBuf {
+        self.crash_dir
+            .clone()
+            .or_else(|| self.session_log.parent().map(Path::to_path_buf))
+            .unwrap_or_default()
+    }
+
+    /// Todos los ficheros que merece la pena mirar, de lo más resumido a lo más
+    /// crudo. La UI los usa para pestañas y botones.
+    pub fn reports(&self) -> Vec<(&'static str, PathBuf)> {
+        let mut out = Vec::new();
+        if let Some(summary) = &self.summary {
+            out.push(("Resumen", summary.clone()));
+        }
+        if !self.session_log.as_os_str().is_empty() {
+            out.push(("Sesión", self.session_log.clone()));
+        }
+        if let Some(mods) = &self.mod_log {
+            out.push(("Mods", mods.clone()));
+        }
+        if let Some(report) = &self.crash_report {
+            out.push(("Crash report", report.clone()));
+        }
+        if let Some(jvm) = &self.jvm_log {
+            out.push(("JVM (hs_err)", jvm.clone()));
+        }
+        if let Some(latest) = &self.game_latest_log {
+            out.push(("latest.log", latest.clone()));
+        }
+        out
+    }
+}
+
 /// Clasifica el final de una partida: código de salida, causa probable (del crash
-/// report oficial o de heurísticas sobre la salida) y rutas de logs. `tail` son las
-/// últimas líneas del juego (las mismas que pinta la UI); `session_start` es cuándo
-/// arrancó (para saber si los ficheros del gameDir son de esta partida).
+/// report oficial o de heurísticas sobre la salida) y rutas de los logs del
+/// gameDir. `tail` son las últimas líneas del juego (las mismas que pinta la UI).
 pub fn classify(
     status: std::io::Result<std::process::ExitStatus>,
     game_dir: &Path,
-    log_path: PathBuf,
     tail: &[String],
 ) -> GameExit {
     let (ok, code) = match status {
@@ -121,8 +191,6 @@ pub fn classify(
         jvm_log = latest_jvm_log(game_dir);
         game_latest = game_latest_log(game_dir);
     }
-    // Se llama justo al terminar la partida: «fresco» (últimos 10 min) basta para
-    // saber que el fichero del gameDir es de esta sesión.
 
     let cause = if ok {
         None
@@ -140,12 +208,229 @@ pub fn classify(
         ok,
         code,
         cause,
-        log_path,
+        session_log: PathBuf::new(),
+        crash_dir: None,
+        summary: None,
+        mod_log: None,
         crash_report,
         jvm_log,
         game_latest_log: game_latest,
     }
 }
+
+/// Lo que `organize` dejó escrito en disco para una sesión.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Artifacts {
+    pub mod_log: Option<PathBuf>,
+    pub crash_dir: Option<PathBuf>,
+    pub summary: Option<PathBuf>,
+}
+
+/// Reúne, para una sesión ya terminada, el log de mods y (si falló) el expediente
+/// de crash autocontenido. Se llama justo después de `GameLogMirror::finish`, así
+/// que el gameDir aún está fresco y los ficheros de Mojang/JVM son de esta partida.
+pub fn organize(
+    paths: &Paths,
+    slug: &str,
+    stamp: &str,
+    exit: &GameExit,
+    session_log: &Path,
+) -> Artifacts {
+    let slug = sanitize(slug);
+    let mod_log = write_mod_log(paths, &slug, stamp, exit, session_log);
+    let (crash_dir, summary) = if exit.ok {
+        (None, None)
+    } else {
+        let dir = write_crash_bundle(paths, &slug, stamp, exit, session_log, mod_log.as_deref());
+        (Some(dir.clone()), Some(dir.join("resumen.txt")))
+    };
+    Artifacts {
+        mod_log,
+        crash_dir,
+        summary,
+    }
+}
+
+// ── Log de mods ──────────────────────────────────────────────────────────────
+
+/// Marcadores de una línea «de mods». Se busca en minúsculas: los cargadores
+/// escriben con su propia capitalización y no queremos perder líneas por eso.
+const MOD_MARKERS: [&str; 15] = [
+    "mixin",
+    "modid",
+    "mod id",
+    "mod file",
+    "modlauncher",
+    "fabricloader",
+    "fabric loader",
+    "quilt",
+    "neoforge",
+    "forge",
+    "fml",
+    "optifine",
+    // «mods» en cualquier forma: «Loading 42 mods:», «mods/sodium.jar»,
+    // «duplicate mods»… y no aparece en palabras normales («models» no lo tiene).
+    "mods",
+    ".jar",
+    "duplicate mod",
+];
+
+/// ¿Es una línea relacionada con mods? Pública para poder testearla.
+pub fn is_mod_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    MOD_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Escribe `logs/mods/<slug>/<fecha>.log`: la lista de mods de la carpeta más las
+/// líneas de la sesión que hablan de mods. Devuelve la ruta, o `None` si no había
+/// ni mods ni líneas que los mencionen.
+fn write_mod_log(
+    paths: &Paths,
+    slug: &str,
+    stamp: &str,
+    exit: &GameExit,
+    session_log: &Path,
+) -> Option<PathBuf> {
+    let mods = list_mods(&paths.instance_dir(slug));
+    let session = std::fs::read(session_log).ok()?;
+    let text = String::from_utf8_lossy(&session);
+    let matched: Vec<&str> = text
+        .lines()
+        .filter(|line| is_mod_line(line))
+        .collect();
+    if mods.is_empty() && matched.is_empty() {
+        return None;
+    }
+
+    let dir = paths.mod_logs(slug);
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{stamp}.log"));
+    let mut file = std::fs::File::create(&path).ok()?;
+
+    let _ = writeln!(
+        file,
+        "── Mods de «{slug}» · {stamp} · fin {} ──",
+        if exit.ok { "correcto" } else { "con error" }
+    );
+    let _ = writeln!(file, "Mods en la carpeta ({}):", mods.len());
+    for (name, size) in &mods {
+        let _ = writeln!(file, "  {name}   ({})", human_size(*size));
+    }
+    let _ = writeln!(file, "\n── Líneas de la sesión relacionadas con mods ──");
+    if matched.is_empty() {
+        let _ = writeln!(file, "(el juego no mencionó ningún mod)");
+    }
+    for line in matched {
+        let _ = writeln!(file, "{line}");
+    }
+    prune_mod_dir(&dir);
+    Some(path)
+}
+
+/// Mods de `mods/`: nombre y tamaño, ordenados por nombre. Los `.disabled`
+/// cuentan igual: saber qué hay apagado también importa al depurar.
+fn list_mods(game_dir: &Path) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    if let Ok(read) = std::fs::read_dir(game_dir.join("mods")) {
+        for entry in read.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !(name.ends_with(".jar") || name.ends_with(".disabled")) {
+                continue;
+            }
+            let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            out.push((name, size));
+        }
+    }
+    out.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    out
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{} KB", bytes / 1024)
+    }
+}
+
+// ── Expediente de crash ──────────────────────────────────────────────────────
+
+/// Escribe `logs/crash/<slug>/<stamp>/` con TODO lo que hace falta para depurar
+/// el fallo y devuelve la carpeta. Cada fichero se copia con un nombre que dice
+/// de dónde salió: quien lo lea no tiene que adivinar.
+fn write_crash_bundle(
+    paths: &Paths,
+    slug: &str,
+    stamp: &str,
+    exit: &GameExit,
+    session_log: &Path,
+    mod_log: Option<&Path>,
+) -> PathBuf {
+    let dir = paths.crash_logs(slug).join(stamp);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return dir;
+    }
+
+    // Ficheros copiados, del más específico al más general.
+    let copies: [(&str, Option<&Path>); 5] = [
+        ("sesion.log", Some(session_log)),
+        ("mods.log", mod_log),
+        ("minecraft-crash-report.txt", exit.crash_report.as_deref()),
+        ("minecraft-latest.log", exit.game_latest_log.as_deref()),
+        ("jvm-hs-err.log", exit.jvm_log.as_deref()),
+    ];
+    let mut written: Vec<String> = Vec::new();
+    for (name, source) in copies {
+        let Some(source) = source else { continue };
+        if source.as_os_str().is_empty() || !source.is_file() {
+            continue;
+        }
+        if std::fs::copy(source, dir.join(name)).is_ok() {
+            written.push(name.to_string());
+        }
+    }
+
+    let summary = dir.join("resumen.txt");
+    if let Ok(mut file) = std::fs::File::create(&summary) {
+        let _ = writeln!(file, "── McLite · resumen de la sesión que falló ──");
+        let _ = writeln!(file, "Instancia : {slug}");
+        let _ = writeln!(
+            file,
+            "Causa     : {}",
+            exit.cause.as_deref().unwrap_or("desconocida")
+        );
+        let _ = writeln!(file, "Código    : {}", exit.code);
+        let _ = writeln!(file, "Fecha     : {stamp}");
+        let _ = writeln!(file, "Launcher  : McLite {}", crate::LAUNCHER_VERSION);
+        let _ = writeln!(file, "\nFicheros en este expediente:");
+        for name in &written {
+            let _ = writeln!(file, "  {name}");
+        }
+        let _ = writeln!(file, "\nSesión completa : {}", session_log.display());
+        if let Some(report) = &exit.crash_report {
+            let _ = writeln!(file, "Crash report    : {}", report.display());
+        }
+        if let Some(latest) = &exit.game_latest_log {
+            let _ = writeln!(file, "latest.log      : {}", latest.display());
+        }
+        if let Some(jvm) = &exit.jvm_log {
+            let _ = writeln!(file, "hs_err de JVM   : {}", jvm.display());
+        }
+        let _ = writeln!(
+            file,
+            "\nConsejo: comprime esta carpeta y mándala entera; ya lleva todo lo necesario."
+        );
+    }
+
+    prune_crash_dir(&paths.crash_logs(slug));
+    dir
+}
+
+// ── Búsqueda de ficheros del gameDir ─────────────────────────────────────────
 
 /// El crash report más reciente de `gameDir/crash-reports/` (los últimos 10 min).
 fn latest_crash_report(game_dir: &Path) -> Option<PathBuf> {
@@ -183,7 +468,7 @@ fn recent_file_in(dir: &Path, matches_name: impl Fn(&str) -> bool) -> Option<Pat
             entry
                 .metadata()
                 .and_then(|meta| meta.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or(SystemTime::UNIX_EPOCH)
         })?
         .path();
 
@@ -292,11 +577,11 @@ fn kind_of(name: &str) -> u8 {
     }
 }
 
-/// Deja en `dir` solo las últimas `KEEP_GAME_LOGS` sesiones de cada tipo (OK y
-/// CRASH se podan por separado) y los provisionales con más de una hora sin
-/// escribir (una sesión en vivo escribe constantemente; uno muerto ya no sirve).
-/// Devuelve cuántos ficheros borró.
-fn prune(dir: &Path) -> usize {
+/// Deja en la carpeta de una instancia solo las últimas `KEEP_GAME_LOGS` sesiones
+/// de cada tipo (OK y CRASH se podan por separado) y los provisionales con más de
+/// una hora sin escribir (una sesión en vivo escribe constantemente; uno muerto
+/// ya no sirve). Devuelve cuántos ficheros borró.
+fn prune_session_dir(dir: &Path) -> usize {
     let mut grupos: [Vec<(SystemTime, PathBuf)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     if let Ok(read) = std::fs::read_dir(dir) {
         for entry in read.flatten() {
@@ -334,6 +619,53 @@ fn prune(dir: &Path) -> usize {
                     removed += 1;
                 }
             }
+        }
+    }
+    removed
+}
+
+/// Poda `logs/mods/<instancia>/`: se queda con las últimas `KEEP_GAME_LOGS`.
+fn prune_mod_dir(dir: &Path) -> usize {
+    let mut files: Vec<(SystemTime, PathBuf)> = Vec::new();
+    if let Ok(read) = std::fs::read_dir(dir) {
+        for entry in read.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            files.push((modified, entry.path()));
+        }
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut removed = 0;
+    for (_, path) in files.iter().skip(KEEP_GAME_LOGS) {
+        if std::fs::remove_file(path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Poda `logs/crash/<instancia>/`: se queda con los últimos `KEEP_CRASH_BUNDLES`
+/// expedientes (carpetas) y borra los ficheros sueltos antiguos (formato previo).
+fn prune_crash_dir(dir: &Path) -> usize {
+    let mut dirs: Vec<(SystemTime, PathBuf)> = Vec::new();
+    let mut removed = 0;
+    if let Ok(read) = std::fs::read_dir(dir) {
+        for entry in read.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            // Solo los expedientes (carpetas) cuentan para el límite. Los
+            // ficheros sueltos del formato antiguo (logs/crash/<fecha>.log) se
+            // conservan tal cual: no se tocan datos del usuario por estética.
+            if meta.is_dir() {
+                dirs.push((modified, path));
+            }
+        }
+    }
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in dirs.iter().skip(KEEP_CRASH_BUNDLES) {
+        if std::fs::remove_dir_all(path).is_ok() {
+            removed += 1;
         }
     }
     removed
@@ -379,6 +711,12 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_paths(name: &str) -> Paths {
+        let root = std::env::temp_dir().join(format!("mclite-crash-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        Paths::with_root(root)
+    }
 
     #[test]
     fn lee_la_description_del_crash_report() {
@@ -447,5 +785,118 @@ mod tests {
         assert_eq!(kind_of("2026-09-28_184512_mi-instancia__CRASH.log"), 2);
         assert_eq!(kind_of("2026-09-28_184512_mi-instancia__OK.log"), 1);
         assert_eq!(kind_of("2026-09-28_184512_mi-instancia.log"), 0);
+    }
+
+    #[test]
+    fn reconoce_las_lineas_de_mods() {
+        assert!(is_mod_line("[18:45:12] [main/INFO]: Loading 42 mods:"));
+        assert!(is_mod_line("[main/WARN]: Mixin config sodium.mixins.json not found"));
+        assert!(is_mod_line("[worker/INFO]: Mod file mods/jei-1.21.jar requires fabric"));
+        assert!(is_mod_line("loading modid=sodium version=0.6"));
+        // Una línea normal no entra.
+        assert!(!is_mod_line("[Render thread/INFO]: OpenGL 4.6 ready"));
+    }
+
+    #[test]
+    fn la_sesion_vive_en_su_carpeta_y_se_cierra_con_sufijo() {
+        let paths = temp_paths("sesion");
+        let mut mirror = GameLogMirror::new(&paths, "Mi Pack");
+        mirror.write_line("hola");
+        let stamp = mirror.stamp().to_string();
+        let provisional = mirror.path().to_path_buf();
+        assert_eq!(provisional.parent(), Some(paths.game_logs("Mi Pack").as_path()));
+        assert!(provisional.ends_with(format!("{stamp}_Mi_Pack.log")));
+
+        let final_path = mirror.finish(false);
+        assert!(final_path.ends_with(format!("{stamp}_Mi_Pack__CRASH.log")));
+        assert!(final_path.is_file());
+        assert!(!provisional.exists());
+
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn el_crash_deja_expediente_y_log_de_mods() {
+        let paths = temp_paths("bundle");
+        paths.ensure().unwrap();
+        // Una instancia con un mod.
+        let game_dir = paths.instance_dir("Mi_Pack");
+        std::fs::create_dir_all(game_dir.join("mods")).unwrap();
+        std::fs::write(game_dir.join("mods").join("sodium.jar"), vec![0u8; 2048]).unwrap();
+
+        let mut mirror = GameLogMirror::new(&paths, "Mi_Pack");
+        let stamp = mirror.stamp().to_string();
+        mirror.write_line("[main/INFO]: Loading 1 mods:");
+        mirror.write_line("[main/INFO]: Mixin config sodium.mixins.json");
+        mirror.write_line("[Render thread/INFO]: OpenGL 4.6 ready");
+        let session_log = mirror.finish(false);
+
+        let exit = GameExit {
+            ok: false,
+            code: 1,
+            cause: Some("Rendering overlay".into()),
+            session_log: session_log.clone(),
+            crash_dir: None,
+            summary: None,
+            mod_log: None,
+            crash_report: None,
+            jvm_log: None,
+            game_latest_log: None,
+        };
+        let artifacts = organize(&paths, "Mi_Pack", &stamp, &exit, &session_log);
+
+        // Log de mods: lista el jar y las líneas de mods, no las de OpenGL.
+        let mod_log = artifacts.mod_log.clone().expect("debería haber log de mods");
+        let mods_text = std::fs::read_to_string(&mod_log).unwrap();
+        assert!(mods_text.contains("sodium.jar"), "{mods_text}");
+        assert!(mods_text.contains("Mixin config"), "{mods_text}");
+        assert!(!mods_text.contains("OpenGL 4.6"), "{mods_text}");
+
+        // Expediente: autocontenido, con copia de la sesión y resumen.
+        let crash_dir = artifacts.crash_dir.clone().expect("debería haber expediente");
+        assert_eq!(crash_dir, paths.crash_logs("Mi_Pack").join(&stamp));
+        assert!(crash_dir.join("sesion.log").is_file());
+        assert!(crash_dir.join("mods.log").is_file());
+        let resumen = std::fs::read_to_string(crash_dir.join("resumen.txt")).unwrap();
+        assert!(resumen.contains("Rendering overlay"), "{resumen}");
+        assert!(resumen.contains("Mi_Pack"), "{resumen}");
+
+        // Y todos los ficheros se ofrecen a la UI.
+        let listed = GameExit {
+            summary: artifacts.summary.clone(),
+            crash_dir: artifacts.crash_dir.clone(),
+            mod_log: artifacts.mod_log.clone(),
+            ..exit.clone()
+        }
+        .reports();
+        assert_eq!(listed.len(), 3, "{listed:?}");
+
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn una_sesion_correcta_no_genera_expediente() {
+        let paths = temp_paths("ok");
+        paths.ensure().unwrap();
+        let mirror = GameLogMirror::new(&paths, "sin_mods");
+        let stamp = mirror.stamp().to_string();
+        let session_log = mirror.finish(true);
+        let exit = GameExit {
+            ok: true,
+            code: 0,
+            cause: None,
+            session_log: session_log.clone(),
+            crash_dir: None,
+            summary: None,
+            mod_log: None,
+            crash_report: None,
+            jvm_log: None,
+            game_latest_log: None,
+        };
+        let artifacts = organize(&paths, "sin_mods", &stamp, &exit, &session_log);
+        assert!(artifacts.crash_dir.is_none());
+        // Sin mods ni líneas de mods, no se escribe un fichero vacío.
+        assert!(artifacts.mod_log.is_none());
+        let _ = std::fs::remove_dir_all(paths.root());
     }
 }

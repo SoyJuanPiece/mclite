@@ -349,6 +349,8 @@ pub struct PlayRequest {
     /// Java forzado. `None` = autodetección.
     pub java: Option<PathBuf>,
     pub extra_jvm_args: Vec<String>,
+    /// Afinar el GC para jugar (ver `launch::optimized_jvm_args`).
+    pub optimize_jvm: bool,
     pub filter: VersionFilter,
 }
 
@@ -489,6 +491,7 @@ pub fn prepare(
         width: req.width,
         height: req.height,
         extra_jvm_args: req.extra_jvm_args.clone(),
+        optimize_jvm: req.optimize_jvm,
     })?;
 
     Ok(Prepared {

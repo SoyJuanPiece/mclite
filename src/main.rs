@@ -594,6 +594,7 @@ fn cmd_launch(cli: &Cli) -> mclite::Result<()> {
         height,
         java: java.clone(),
         extra_jvm_args: Vec::new(),
+        optimize_jvm: true,
         filter: filter(cli),
     };
 
@@ -633,25 +634,57 @@ fn cmd_launch(cli: &Cli) -> mclite::Result<()> {
 
 fn cmd_crashes(cli: &Cli) -> mclite::Result<()> {
     let paths = cli.paths()?;
-    let dir = paths.logs().join("crash");
-    let entries: Vec<_> = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let root = paths.crash_logs_root();
+    let mut entries = Vec::new();
+    collect_logs(&root, &mut entries, 0);
+
     if entries.is_empty() {
-        println!("No hay logs de crash en {}", dir.display());
+        println!("No hay logs de crash en {}", root.display());
+        println!("En cuanto una partida falle, su expediente aparecerá aquí.");
         return Ok(());
     }
-    println!("Logs de crash en {}:\n", dir.display());
-    for path in entries {
-        println!("  {}", path.display());
+    // Los más recientes primero.
+    entries.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    });
+    entries.reverse();
+
+    println!("Logs de crash en {}:\n", root.display());
+    for path in entries.iter().take(40) {
+        let rel = path.strip_prefix(&root).unwrap_or(path);
+        println!("  {}", rel.display());
     }
+    if entries.len() > 40 {
+        println!("  … y {} más", entries.len() - 40);
+    }
+    println!("\nSesiones de juego (OK y CRASH): {}", paths.game_logs_root().display());
+    println!("Logs de mods:                   {}", paths.mod_logs_root().display());
     Ok(())
+}
+
+/// Junta los `.log`/`.txt` de `dir` y sus subcarpetas (expedientes de crash).
+fn collect_logs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_logs(&path, out, depth + 1);
+            continue;
+        }
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "log" || ext == "txt")
+        {
+            out.push(path);
+        }
+    }
 }
 
 fn mb(bytes: u64) -> String {

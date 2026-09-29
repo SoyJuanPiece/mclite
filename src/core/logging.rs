@@ -36,7 +36,7 @@ pub fn init(paths: &Paths) {
 fn open_log_file(paths: &Paths) -> Option<File> {
     let dir = paths.logs();
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("launcher.log");
+    let path = paths.launcher_log();
 
     // Rota si el actual creció demasiado.
     if let Ok(meta) = std::fs::metadata(&path) {
@@ -82,7 +82,7 @@ pub fn error(message: &str) {
 
 /// Ruta del log de arranque (para el botón de Ajustes). `None` si aún no se inició.
 pub fn file_path(paths: &Paths) -> PathBuf {
-    paths.logs().join("launcher.log")
+    paths.launcher_log()
 }
 
 #[cfg(test)]

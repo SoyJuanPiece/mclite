@@ -37,7 +37,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
         .map(|version| (version.id.clone(), version.stable))
         .collect();
     let loader_loading = app.form.loader_loading;
-    let busy = app.job.is_some();
+    let busy = app.job.is_some() || app.playing.is_some();
 
     let mut action: Option<Action> = None;
 

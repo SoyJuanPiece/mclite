@@ -70,9 +70,23 @@ mclite/
 │   ├── instances/<slug>/ ← cada instancia (game dir)
 │   ├── cache/icons/      ← iconos de packs
 │   ├── cache/skins/      ← skins offline
-│   └── backups/          ← copias .zip exportadas
-└── logs/launcher.log
+│   ├── backups/          ← copias .zip exportadas
+│   └── logs/
+│       ├── launcher.log                     ← arranque del launcher
+│       ├── game/<instancia>/<fecha>__OK.log ← una sesión completa por partida
+│       ├── game/<instancia>/<fecha>__CRASH.log
+│       ├── mods/<instancia>/<fecha>.log     ← solo lo de mods
+│       └── crash/<instancia>/<fecha>/       ← expediente autocontenido del fallo
+└── (nada más)
 ```
+
+Los logs están separados a propósito: el del launcher, el de cada sesión de juego,
+elsolo de mods y el expediente del crash. El expediente lleva copia de todo (tu
+sesión, el `crash-reports/` de Mojang, el `hs_err_pid*.log` de la JVM y el
+`logs/latest.log` del juego), así que se puede comprimir y mandar entero.
+
+Cuando el juego se cierra solo, McLite abre encima un panel con esos logs y la
+causa probable, sin que tengas que buscar nada en el disco.
 
 ## 🧱 Cómo está hecho
 
@@ -80,6 +94,15 @@ Rust + egui/eframe (wgpu), sin `.NET` ni frameworks pesados. Módulos principale
 
 - `core/` — instalación, lanzamiento, cargadores, manifiesto, skins, updater, MSA, mods, backups, RPC. Sin dependencias de UI: la CLI (`mclite help`) usa lo mismo que la ventana.
 - `ui/` — pantallas egui con el tema propio (acordeón, tarjetas, barra de estado).
+
+### Rendimiento
+
+- Al lanzar el juego, la ventana se minimiza y deja de repintarse (el log del
+  juego se acumula en memoria sin forzar fotogramas hasta que termina la partida).
+- La JVM del juego se afina con el G1 configurado para Minecraft (los «flags de
+  Aikar»), apagable en **Ajustes → Rendimiento**.
+- Se pasa siempre `-XX:-OmitStackTraceInFastThrow` para que los crashes dejen el
+  stack trace completo en lugar de un error sin contexto.
 
 ```bash
 cargo test --no-default-features   # suite de tests

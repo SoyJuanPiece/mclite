@@ -121,12 +121,30 @@ const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// usan: así ningún mensaje (manifiesto, fin de trabajo, línea del juego…)
 /// se queda dormido esperando un repintado que no va a llegar.
 #[derive(Clone)]
-struct MsgTx(Sender<Message>, egui::Context);
+struct MsgTx(
+    Sender<Message>,
+    egui::Context,
+    /// Silencio para `Message::Log` mientras el juego corre: cada línea del log
+    /// pedía un repintado (miles por sesión) y eso es justo lo que no queremos
+    /// cuando el launcher está en segundo plano. El log sigue acumulándose; lo
+    /// que no hace es forzar fotogramas.
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+);
 
 impl MsgTx {
     fn send(&self, message: Message) {
+        let quiet = matches!(message, Message::Log(_))
+            && self.2.load(std::sync::atomic::Ordering::Relaxed);
         let _ = self.0.send(message);
-        self.1.request_repaint();
+        if !quiet {
+            self.1.request_repaint();
+        }
+    }
+
+    /// Silencia (o desilencia) los repintados por líneas del log.
+    fn set_quiet(&self, on: bool) {
+        self.2
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -292,6 +310,13 @@ pub struct McLiteApp {
     rpc_started: Option<std::time::Instant>,
     /// Resultado de la última partida (causa del crash, log guardado…).
     pub last_game_exit: Option<crash::GameExit>,
+    /// Panel de logs del crash abierto (se abre solo si el juego falla).
+    pub crash_open: bool,
+    /// Pestaña activa del panel de crash.
+    pub crash_tab: usize,
+    /// Logs ya leídos de disco, para no releer megas en cada fotograma.
+    /// (ruta, ¿por el final?, texto)
+    report_cache: Vec<(std::path::PathBuf, bool, String)>,
     /// Instancia que se está editando (Screen::Edit).
     pub editing_slug: Option<String>,
     /// Filtro del buscador de la lista lateral.
@@ -773,7 +798,11 @@ impl McLiteApp {
             });
         let (raw_tx, rx) = channel();
         // Todos los hilos envían por aquí: cada send despierta la GUI.
-        let tx = MsgTx(raw_tx, cc.egui_ctx.clone());
+        let tx = MsgTx(
+            raw_tx,
+            cc.egui_ctx.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
 
         let mut app = Self {
             paths,
@@ -792,6 +821,9 @@ impl McLiteApp {
             error: None,
             confirm_delete: None,
             last_game_exit: None,
+            crash_open: false,
+            crash_tab: 0,
+            report_cache: Vec::new(),
             editing_slug: None,
             sidebar_search: String::new(),
             toasts: Vec::new(),
@@ -984,11 +1016,16 @@ impl McLiteApp {
             Message::GameExit(result) => {
                 self.job = None;
                 self.playing = None;
+                // Ya no hay nadie escribiendo: los logs vuelven a despertar la GUI.
+                self.tx.set_quiet(false);
                 // Limpiar la presencia de Discord (si hubo conexión).
                 if let Some(mut rpc) = self.rpc.take() {
                     let _ = rpc.clear();
                 }
                 self.rpc_started = None;
+                // La ventana se había ido a segundo plano al lanzar: vuelve al
+                // frente, que aquí es donde hace falta (más aún si hubo crash).
+                self.restore_window();
                 if result.ok {
                     self.status = format!("El juego terminó con código {}", result.code);
                 } else {
@@ -999,6 +1036,10 @@ impl McLiteApp {
                             .clone()
                             .unwrap_or_else(|| format!("código de salida {}", result.code)),
                     );
+                    // Los logs del fallo, delante de la cara: sin buscarlos a mano.
+                    if self.config.crash_logs_auto {
+                        self.open_crash_panel();
+                    }
                 }
                 self.last_game_exit = Some(result);
             }
@@ -1020,6 +1061,14 @@ impl McLiteApp {
             }
             Message::Playing { slug } => {
                 self.playing = Some(slug.clone());
+                // El lanzamiento terminó: fuera la barra de progreso (si no, el
+                // launcher seguiría repintándose a 30 fps toda la partida).
+                self.job = None;
+                // Y al segundo plano, consumiendo lo mínimo.
+                self.tx.set_quiet(true);
+                if self.config.minimize_on_play {
+                    self.minimize_window();
+                }
                 // Discord RPC: presencia al arrancar la partida (silencioso si
                 // no hay Discord o falla el pipe).
                 if self.config.discord_rpc {
@@ -1138,6 +1187,47 @@ impl McLiteApp {
             let overflow = self.log.len() - MAX_LINES;
             self.log.drain(..overflow);
         }
+    }
+
+    // ── Ventana: segundo plano y panel de crash ──────────────────────────────
+
+    /// Manda la ventana a la barra de tareas mientras el juego corre.
+    pub(crate) fn minimize_window(&self) {
+        self.tx
+            .1
+            .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+
+    /// Recupera la ventana al terminar la partida (y le devuelve el foco).
+    pub(crate) fn restore_window(&self) {
+        self.tx
+            .1
+            .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        self.tx.1.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// Abre el panel con los logs del último fallo.
+    pub(crate) fn open_crash_panel(&mut self) {
+        self.report_cache.clear();
+        self.crash_tab = 0;
+        self.crash_open = true;
+    }
+
+    /// Texto de un log, ya recortado y cacheado (no se relee en cada fotograma).
+    /// `tail` = interesa el final del fichero (sesión, mods, latest.log).
+    pub(crate) fn report_text(&mut self, path: &std::path::Path, tail: bool) -> String {
+        if let Some((_, _, text)) = self
+            .report_cache
+            .iter()
+            .find(|(cached, cached_tail, _)| cached == path && *cached_tail == tail)
+        {
+            return text.clone();
+        }
+        let text = read_report(path, tail);
+        // El panel enseña un fichero a la vez: con dos cachés por ruta sobra.
+        self.report_cache.retain(|(cached, _, _)| cached != path);
+        self.report_cache.push((path.to_path_buf(), tail, text.clone()));
+        text
     }
 
     // ── Navegación ───────────────────────────────────────────────────────────
@@ -1503,6 +1593,7 @@ impl McLiteApp {
                     height: 480,
                     java: config.java_path.clone(),
                     extra_jvm_args: Vec::new(),
+                    optimize_jvm: config.optimized_jvm,
                     filter: config.version_filter(),
                 };
                 let opts = InstallOptions::default();
@@ -1709,6 +1800,7 @@ impl McLiteApp {
                 .clone()
                 .or_else(|| self.config.java_path.clone()),
             extra_jvm_args: Vec::new(),
+            optimize_jvm: self.config.optimized_jvm,
             filter: self.config.version_filter(),
         };
         let opts = self.install_options();
@@ -1728,14 +1820,18 @@ impl McLiteApp {
             let http = HttpClient::new();
             let progress = Progress::new(GuiSink::new(tx.clone()));
 
+            let slug_inicial = request_slug(&request);
             // El log de la sesión de juego empieza ANTES de preparar: así un fallo
             // de preparación (red, Java, instaladores…) también queda registrado y
-            // en logs/crash/ no quedan ficheros vacíos ni «fantasma».
-            let mut mirror = crash::GameLogMirror::new(&paths, &request_slug(&request));
+            // en logs/game/ no quedan ficheros vacíos ni «fantasma».
+            let mut mirror = crash::GameLogMirror::new(&paths, &slug_inicial);
+            let version_id = instance_version_id(&request);
             mirror.write_line(&format!(
-                "── McLite {} · sesión de juego · instancia {} ──",
+                "── McLite {} · sesión de juego ──\ninstancia: {slug_inicial} · {version_id} · {} MB · {}×{}",
                 LAUNCHER_VERSION,
-                request_slug(&request)
+                request.memory_mb,
+                request.width,
+                request.height
             ));
 
             let prepared = match install::prepare(&http, &paths, &request, &opts, &progress) {
@@ -1743,10 +1839,17 @@ impl McLiteApp {
                 Err(err) => {
                     mirror.write_line(&format!("error al preparar: {err}"));
                     logging::error(&format!("fallo al preparar el lanzamiento: {err}"));
-                    tx.send(Message::Failed(err.to_string()));
-                    // Sesión fallida: el espejo se cierra con __CRASH para que no
-                    // quede provisional ni se mezcle con las sesiones OK.
-                    let _ = mirror.finish(false);
+                    // Sesión fallida: __CRASH, expediente y panel con el motivo
+                    // delante (aunque el juego ni llegara a arrancar).
+                    finish_session(
+                        &paths,
+                        &slug_inicial,
+                        mirror,
+                        false,
+                        Some(err.to_string()),
+                        1,
+                        &tx,
+                    );
                     return;
                 }
             };
@@ -1769,8 +1872,15 @@ impl McLiteApp {
                 Err(err) => {
                     mirror.write_line(&format!("error al arrancar: {err}"));
                     logging::error(&format!("no pudo arrancar el juego: {err}"));
-                    tx.send(Message::Failed(err.to_string()));
-                    let _ = mirror.finish(false);
+                    finish_session(
+                        &paths,
+                        &slug_inicial,
+                        mirror,
+                        false,
+                        Some(err.to_string()),
+                        1,
+                        &tx,
+                    );
                     return;
                 }
             };
@@ -1780,9 +1890,9 @@ impl McLiteApp {
             tx.send(Message::Playing { slug: request_slug(&request) });
 
             // Las líneas del juego van a la UI **y** al espejo en
-            // logs/crash/<instancia>-<timestamp>.log que sobrevive al cierre.
+            // logs/game/<instancia>/<fecha>.log, que sobrevive al cierre.
             let game_dir = request.game_dir.clone();
-            let slug = request_slug(&request);
+            let slug = slug_inicial.clone();
             let mut tail: Vec<String> = Vec::new();
             for line in log_rx {
                 mirror.write_line(&line);
@@ -1794,24 +1904,41 @@ impl McLiteApp {
             }
 
             let status = child.wait();
-            let result = crash::classify(status, &game_dir, std::path::PathBuf::new(), &tail);
+            let ok = status
+                .as_ref()
+                .map(std::process::ExitStatus::success)
+                .unwrap_or(false);
+            let result = crash::classify(status, &game_dir, &tail);
             mirror.write_line(&match &result.cause {
                 Some(cause) => format!("── fin: {cause} ──"),
                 None => format!("── fin: ok, código {} ──", result.code),
             });
-            // El log se cierra con su nombre final (…__OK.log / …__CRASH.log) y se
-            // poda la carpeta. Los ficheros del gameDir (crash report, hs_err de la
-            // JVM, latest.log) ya los recogió classify() con el proceso recién muerto.
             logging::info(&format!(
                 "el juego terminó: ok={} código={}",
                 result.ok, result.code
             ));
+
+            // La sesión se cierra con su nombre final (…__OK.log / …__CRASH.log) en
+            // logs/game/, y si falló se monta el expediente y el log de mods. Los
+            // ficheros del gameDir (crash report, hs_err de la JVM, latest.log) los
+            // recogió classify() con el proceso recién muerto.
+            let stamp = mirror.stamp().to_string();
+            let session_log = mirror.finish(ok);
+            let artifacts =
+                crash::organize(&paths, &slug_inicial, &stamp, &result, &session_log);
+
             tx.send(Message::Played { slug: slug.clone() });
             tx.send(Message::PlaySession {
                 slug,
                 secs: session_start.elapsed().as_secs(),
             });
-            tx.send(Message::GameExit(result));
+            tx.send(Message::GameExit(crash::GameExit {
+                session_log,
+                crash_dir: artifacts.crash_dir,
+                summary: artifacts.summary,
+                mod_log: artifacts.mod_log,
+                ..result
+            }));
         });
     }
 
@@ -1937,6 +2064,85 @@ fn resolve_account(
     })
 }
 
+/// Lee un log y devuelve solo lo que se va a pintar: como mucho 400 líneas (por
+/// el principio o por el final) y un aviso de cuánto se omitió. Un `latest.log`
+/// del juego puede ocupar megas y pintarlo entero congelaría la ventana.
+fn read_report(path: &std::path::Path, tail: bool) -> String {
+    const MAX_LINES: usize = 400;
+    const MAX_BYTES: usize = 2 * 1024 * 1024;
+
+    let Ok(raw) = std::fs::read(path) else {
+        return String::new();
+    };
+    let slice = if raw.len() > MAX_BYTES {
+        &raw[raw.len() - MAX_BYTES..]
+    } else {
+        &raw[..]
+    };
+    let text = String::from_utf8_lossy(slice);
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= MAX_LINES {
+        return text.into_owned();
+    }
+
+    let omitted = lines.len() - MAX_LINES;
+    if tail {
+        format!(
+            "… ({omitted} líneas anteriores omitidas)\n\n{}",
+            lines[omitted..].join("\n")
+        )
+    } else {
+        format!(
+            "{}\n\n… ({omitted} líneas más abajo)",
+            lines[..MAX_LINES].join("\n")
+        )
+    }
+}
+
+/// Cierra una sesión que no llegó a jugar (fallo de preparación o de arranque),
+/// con el mismo tratamiento que un crash: log final, expediente y panel abierto.
+fn finish_session(
+    paths: &Paths,
+    slug: &str,
+    mirror: crash::GameLogMirror,
+    ok: bool,
+    cause: Option<String>,
+    code: i32,
+    tx: &MsgTx,
+) {
+    let stamp = mirror.stamp().to_string();
+    let session_log = mirror.finish(ok);
+    let exit = crash::GameExit {
+        ok,
+        code,
+        cause,
+        session_log: session_log.clone(),
+        crash_dir: None,
+        summary: None,
+        mod_log: None,
+        crash_report: None,
+        jvm_log: None,
+        game_latest_log: None,
+    };
+    let artifacts = crash::organize(paths, slug, &stamp, &exit, &session_log);
+    tx.send(Message::GameExit(crash::GameExit {
+        crash_dir: artifacts.crash_dir,
+        summary: artifacts.summary,
+        mod_log: artifacts.mod_log,
+        ..exit
+    }));
+}
+
+/// Id de versión con el que se lanzó (`fabric-loader-0.19.5-1.21.4`), que es lo
+/// que aparece en las cabeceras del log y en el juego.
+fn instance_version_id(request: &PlayRequest) -> String {
+    crate::loaders::version_id_for(
+        request.kind,
+        &request.mc_version,
+        request.loader_version.as_deref(),
+    )
+}
+
 fn request_slug(request: &PlayRequest) -> String {
     request
         .game_dir
@@ -2053,6 +2259,8 @@ impl eframe::App for McLiteApp {
             }
         });
 
+        // El panel de crash va encima de todo: es lo que el usuario tiene que ver.
+        crate::ui::crash::show(self, ctx);
         self.show_toasts(ctx);
 
         self.handle_shortcuts(ctx);
@@ -2063,6 +2271,11 @@ impl eframe::App for McLiteApp {
         // transición en curso se necesita un pulso periódico; en reposo, 0 % CPU.
         if self.job.is_some() || self.screen_fade < 1.0 || !self.toasts.is_empty() || self.msa_login.is_some() {
             ctx.request_repaint_after(Duration::from_millis(33));
+        } else if self.playing.is_some() || self.crash_open {
+            // Con el juego corriendo (ventana minimizada) o el panel de crash
+            // abierto basta un latido por segundo: mientras juegas, el launcher
+            // no debe consumir prácticamente nada.
+            ctx.request_repaint_after(Duration::from_millis(1000));
         }
     }
 }
@@ -2082,12 +2295,20 @@ impl McLiteApp {
             if !busy && ctrl && input.key_pressed(egui::Key::N) {
                 self.open_new();
             }
-            // Volver a Home con Esc (desde Edit/New).
-            if input.key_pressed(egui::Key::Escape) && self.screen != Screen::Home {
+            // Volver a Home con Esc (desde Edit/New), salvo si el panel de crash
+            // está abierto: ahí Esc es para cerrarlo.
+            if input.key_pressed(egui::Key::Escape)
+                && self.screen != Screen::Home
+                && !self.crash_open
+            {
                 self.screen = Screen::Home;
                 self.confirm_delete = None;
             }
         });
+        // Esc cierra primero el panel de crash (es lo que está encima).
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) && self.crash_open {
+            self.crash_open = false;
+        }
     }
 
     /// Drag & drop: un .mrpack inicia la instalación del pack; un .jar se copia
@@ -2209,6 +2430,7 @@ impl McLiteApp {
                     height: 480,
                     java: config.java_path.clone(),
                     extra_jvm_args: Vec::new(),
+                    optimize_jvm: config.optimized_jvm,
                     filter: config.version_filter(),
                 };
                 let opts = InstallOptions::default();

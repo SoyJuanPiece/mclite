@@ -54,6 +54,9 @@ pub struct LaunchContext<'a> {
     pub width: u32,
     pub height: u32,
     pub extra_jvm_args: Vec<String>,
+    /// Afinar el recolector de basura para jugar (G1 con los parámetros que la
+    /// comunidad de Minecraft tiene por buenos). Se puede apagar desde Ajustes.
+    pub optimize_jvm: bool,
 }
 
 /// Línea de comandos ya resuelta.
@@ -226,6 +229,13 @@ pub fn build(ctx: &LaunchContext<'_>) -> Result<LaunchPlan> {
     let mut launcher_jvm_args: Vec<String> = Vec::new();
     launcher_jvm_args.push(format!("-Xmx{}M", ctx.memory_mb.max(512)));
 
+    // Sin esto la JVM «optimiza» los fallos repetidos y los stack traces de los
+    // crashes salen vacíos justo cuando más falta hacen. Es barato y siempre va.
+    launcher_jvm_args.push("-XX:-OmitStackTraceInFastThrow".into());
+    if ctx.optimize_jvm {
+        launcher_jvm_args.extend(optimized_jvm_args().iter().map(|arg| arg.to_string()));
+    }
+
     if let Some(config) = &ctx.logging_config {
         let template = ctx
             .version
@@ -253,6 +263,37 @@ pub fn build(ctx: &LaunchContext<'_>) -> Result<LaunchPlan> {
         game_args,
         game_dir: ctx.game_dir.to_path_buf(),
     })
+}
+
+/// Ajustes de GC pensados para Minecraft (la base de los «flags de Aikar»).
+///
+/// El G1 por defecto asigna heaps jóvenes diminutos y provoca pausas de cientos
+/// de milisegundos en el cliente; con estos porcentajes las pausas bajan a ~50 ms,
+/// que en la práctica es la diferencia entre notar tirones y no notarlos.
+/// Son válidos en Java 8 y en cualquiera posterior, que es todo lo que lanza McLite.
+pub fn optimized_jvm_args() -> Vec<&'static str> {
+    vec![
+        "-XX:+UseG1GC",
+        "-XX:+ParallelRefProcEnabled",
+        "-XX:MaxGCPauseMillis=200",
+        "-XX:+UnlockExperimentalVMOptions",
+        "-XX:+DisableExplicitGC",
+        "-XX:+AlwaysPreTouch",
+        "-XX:G1NewSizePercent=30",
+        "-XX:G1MaxNewSizePercent=40",
+        "-XX:G1HeapRegionSize=8M",
+        "-XX:G1ReservePercent=20",
+        "-XX:G1HeapWastePercent=5",
+        "-XX:G1MixedGCCountTarget=4",
+        "-XX:InitiatingHeapOccupancyPercent=15",
+        "-XX:G1MixedGCLiveThresholdPercent=90",
+        "-XX:G1RSetUpdatingPauseTimePercent=5",
+        "-XX:SurvivorRatio=32",
+        "-XX:+PerfDisableSharedMem",
+        "-XX:MaxTenuringThreshold=1",
+        "-Dusing.aikars.flags=https://mcflags.emc.gs",
+        "-Daikars.new.flags=true",
+    ]
 }
 
 /// Argumentos de JVM de las versiones antiguas, que no los traen en el manifiesto.
@@ -365,6 +406,7 @@ mod tests {
             width: 854,
             height: 480,
             extra_jvm_args: Vec::new(),
+            optimize_jvm: false,
         }
     }
 
@@ -481,6 +523,57 @@ mod tests {
             .contains(&"-Dlog4j.configurationFile=/configs/client-1.12.xml".to_string()));
         // 1.12 es vulnerable a Log4Shell.
         assert!(plan.jvm_args.contains(&"-Dlog4j2.formatMsgNoLookups=true".to_string()));
+    }
+
+    #[test]
+    fn los_flags_de_optimizacion_son_opcionales() {
+        let version = VersionJson::from_str(
+            r#"{"id":"1.21.4","mainClass":"net.minecraft.client.main.Main","assets":"19",
+                "arguments":{"jvm":["-cp","${classpath}"],"game":["--username","${auth_player_name}"]}}"#,
+        )
+        .unwrap();
+        let paths = paths();
+        let account = account();
+
+        // Apagado: nada de G1, pero el arreglo de los stack traces SÍ va siempre.
+        let plan = build(&context(&version, &account, &paths, &[])).unwrap();
+        assert!(!plan.jvm_args.iter().any(|a| a.contains("UseG1GC")));
+        assert!(plan
+            .jvm_args
+            .contains(&"-XX:-OmitStackTraceInFastThrow".to_string()));
+
+        // Encendido: el juego viene afinado.
+        let mut ctx = context(&version, &account, &paths, &[]);
+        ctx.optimize_jvm = true;
+        let plan = build(&ctx).unwrap();
+        assert!(plan.jvm_args.contains(&"-XX:+UseG1GC".to_string()));
+        assert!(plan
+            .jvm_args
+            .contains(&"-XX:MaxGCPauseMillis=200".to_string()));
+        // Y -Xmx sigue siendo el primero (los overrides del usuario van después).
+        assert_eq!(plan.jvm_args[0], "-Xmx4096M");
+    }
+
+    #[test]
+    fn los_args_extra_del_usuario_ganan_a_la_optimizacion() {
+        let version = VersionJson::from_str(
+            r#"{"id":"1.21.4","mainClass":"M","assets":"19",
+                "arguments":{"jvm":["-cp","${classpath}"],"game":["--username","${auth_player_name}"]}}"#,
+        )
+        .unwrap();
+        let paths = paths();
+        let account = account();
+        let mut ctx = context(&version, &account, &paths, &[]);
+        ctx.optimize_jvm = true;
+        ctx.extra_jvm_args = vec!["-Xmx8G".into()];
+        let plan = build(&ctx).unwrap();
+        // La JVM se queda con el ÚLTIMO -Xmx, por eso el del usuario va después.
+        let last_pause = plan
+            .jvm_args
+            .iter()
+            .rposition(|arg| arg.starts_with("-Xmx"))
+            .unwrap();
+        assert_eq!(plan.jvm_args[last_pause], "-Xmx8G");
     }
 
     #[test]

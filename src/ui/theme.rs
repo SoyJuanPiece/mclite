@@ -7,8 +7,8 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use egui::{
-    Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, RichText,
-    Sense, Stroke, TextStyle, Visuals,
+    pos2, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect,
+    RichText, Sense, Shape, Stroke, TextStyle, Visuals,
 };
 
 pub const ACCENT: Color32 = Color32::from_rgb(0x3C, 0x85, 0x27);
@@ -29,7 +29,27 @@ pub const DANGER: Color32 = Color32::from_rgb(0xE0, 0x5D, 0x56);
 pub const BORDER: Color32 = Color32::from_rgb(0x2A, 0x30, 0x2A);
 
 /// Radio de esquina estándar (tarjetas, botones, inputs).
-const RADIUS: f32 = 8.0;
+const RADIUS: f32 = 10.0;
+
+/// Sombra suave y reutilizable: da profundidad a tarjetas y paneles flotantes sin
+/// manchar el fondo. `egui` no trae sombras por defecto en los `Frame`.
+pub fn shadow() -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 14,
+        spread: 0,
+        color: Color32::from_black_alpha(70),
+    }
+}
+
+/// Separador horizontal de una línea, con el borde del tema.
+pub fn separator(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), Sense::hover());
+    ui.painter().rect_filled(rect, 0, BORDER);
+    ui.add_space(6.0);
+}
 
 // ── Acento dinámico ──────────────────────────────────────────────────────────
 
@@ -313,74 +333,147 @@ pub fn avatar(ui: &mut egui::Ui, nick: &str, size: f32) {
     );
 }
 
-/// Logo: bloque de hierba de Minecraft pintado a mano (tierra + césped con
-/// borde irregular). `size` en px, se dibuja cuadrado.
+// ── Bloques de Minecraft (pixel-art procedural) ──────────────────────────────
+
+/// Aspecto de un bloque: cara superior (iluminada), frontal (media) y lateral
+/// (en sombra), más motas opcionales (menas: diamante, redstone…).
+#[derive(Clone, Copy)]
+struct BlockStyle {
+    name: &'static str,
+    top: Color32,
+    front: Color32,
+    side: Color32,
+    speck: Option<Color32>,
+}
+
+/// Bloques reconocibles de un vistazo, con los tonos de Minecraft.
+const BLOCKS: [BlockStyle; 8] = [
+    BlockStyle { name: "Césped", top: Color32::from_rgb(0x62, 0xA1, 0x3F), front: Color32::from_rgb(0x8B, 0x62, 0x3A), side: Color32::from_rgb(0x6E, 0x4C, 0x2C), speck: None },
+    BlockStyle { name: "Diamante", top: Color32::from_rgb(0x8E, 0x99, 0xA0), front: Color32::from_rgb(0x7C, 0x86, 0x8C), side: Color32::from_rgb(0x60, 0x69, 0x6E), speck: Some(Color32::from_rgb(0x4A, 0xEB, 0xE0)) },
+    BlockStyle { name: "Oro", top: Color32::from_rgb(0x9A, 0x9A, 0x9A), front: Color32::from_rgb(0x86, 0x86, 0x86), side: Color32::from_rgb(0x69, 0x69, 0x69), speck: Some(Color32::from_rgb(0xFC, 0xEE, 0x4B)) },
+    BlockStyle { name: "Redstone", top: Color32::from_rgb(0x8E, 0x99, 0xA0), front: Color32::from_rgb(0x7C, 0x86, 0x8C), side: Color32::from_rgb(0x60, 0x69, 0x6E), speck: Some(Color32::from_rgb(0xE0, 0x2A, 0x1F)) },
+    BlockStyle { name: "Esmeralda", top: Color32::from_rgb(0x8E, 0x99, 0xA0), front: Color32::from_rgb(0x7C, 0x86, 0x8C), side: Color32::from_rgb(0x60, 0x69, 0x6E), speck: Some(Color32::from_rgb(0x35, 0xC7, 0x4A)) },
+    BlockStyle { name: "Lapislázuli", top: Color32::from_rgb(0x8E, 0x99, 0xA0), front: Color32::from_rgb(0x7C, 0x86, 0x8C), side: Color32::from_rgb(0x60, 0x69, 0x6E), speck: Some(Color32::from_rgb(0x2C, 0x5A, 0xC8)) },
+    BlockStyle { name: "Tierra", top: Color32::from_rgb(0x9A, 0x6C, 0x40), front: Color32::from_rgb(0x8B, 0x62, 0x3A), side: Color32::from_rgb(0x6E, 0x4C, 0x2C), speck: None },
+    BlockStyle { name: "Piedra", top: Color32::from_rgb(0xA0, 0xA0, 0xA0), front: Color32::from_rgb(0x8C, 0x8C, 0x8C), side: Color32::from_rgb(0x70, 0x70, 0x70), speck: None },
+];
+
+/// Hash estable de un texto (mismo seed → mismo bloque, siempre).
+fn seed_of(text: &str) -> u32 {
+    let mut hash: u32 = 0x9E37_79B9;
+    for byte in text.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+    hash
+}
+
+/// Bloque asignado a un texto (determinista) y su nombre legible.
+pub fn block_for(seed: &str) -> &'static str {
+    BLOCKS[(seed_of(seed) as usize) % BLOCKS.len()].name
+}
+
+/// Cubo isométrico con sombreado plano y motas: el «icono de Minecraft» que usa
+/// el lateral y las cabeceras. Se dibuja a mano (sin red ni ficheros) para que
+/// funcione siempre, incluso recién instalado y sin Internet.
+pub fn block_icon(ui: &mut egui::Ui, seed: &str, size: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
+    draw_block(ui, rect, &BLOCKS[(seed_of(seed) as usize) % BLOCKS.len()]);
+    response.on_hover_text(format!("Bloque «{}»", block_for(seed)))
+}
+
+fn draw_block(ui: &egui::Ui, rect: Rect, style: &BlockStyle) {
+    let p = ui.painter();
+    let cx = rect.center().x;
+    let dy = rect.height() * 0.22;
+    let (top, bottom) = (rect.top(), rect.bottom());
+
+    // Cara superior (rombo), iluminada.
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(cx, top),
+            pos2(rect.right(), top + dy),
+            pos2(cx, top + dy * 2.0),
+            pos2(rect.left(), top + dy),
+        ],
+        style.top,
+        Stroke::NONE,
+    ));
+    // Cara izquierda (en sombra media).
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(rect.left(), top + dy),
+            pos2(cx, top + dy * 2.0),
+            pos2(cx, bottom),
+            pos2(rect.left(), bottom - dy),
+        ],
+        style.front,
+        Stroke::NONE,
+    ));
+    // Cara derecha (la más oscura: la luz viene de la izquierda).
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(cx, top + dy * 2.0),
+            pos2(rect.right(), top + dy),
+            pos2(rect.right(), bottom - dy),
+            pos2(cx, bottom),
+        ],
+        style.side,
+        Stroke::NONE,
+    ));
+
+    // Motas de mena: posiciones derivadas del propio rect (nada aleatorio, para
+    // que el icono no «parpadee» al repintar).
+    if let Some(speck) = style.speck {
+        let s = (rect.width() * 0.10).max(2.0);
+        let points = [
+            (rect.left() + rect.width() * 0.22, top + dy * 2.1),
+            (rect.left() + rect.width() * 0.42, bottom - dy * 1.4),
+            (cx + rect.width() * 0.16, top + dy * 2.4),
+            (cx + rect.width() * 0.30, bottom - dy * 0.9),
+        ];
+        for (x, y) in points {
+            p.rect_filled(
+                Rect::from_min_size(pos2(x, y), egui::vec2(s, s)),
+                CornerRadius::same(1),
+                speck,
+            );
+        }
+    }
+}
+
+/// Bloque de hierba del logo (césped + tierra) en 3D: la cara de siempre del
+/// launcher, pero con volumen.
 pub fn grass_block(ui: &mut egui::Ui, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
-    let p = ui.painter();
-    let px = size / 16.0;
+    draw_block(ui, rect, &BLOCKS[0]);
+}
 
-    let dirt_top = Color32::from_rgb(0x8A, 0x60, 0x38);
-    let dirt_bottom = Color32::from_rgb(0x6B, 0x47, 0x2A);
-    let grass = Color32::from_rgb(0x5D, 0x9C, 0x3F);
+// ── Fichas de datos ──────────────────────────────────────────────────────────
 
-    // Tierra en dos bandas para dar algo de profundidad.
-    let mid = rect.top() + size * 0.55;
-    p.rect_filled(
-        Rect::from_min_max(rect.left_top(), [rect.right(), mid].into()),
-        0.0,
-        dirt_top,
-    );
-    p.rect_filled(
-        Rect::from_min_max([rect.left(), mid].into(), rect.right_bottom()),
-        0.0,
-        dirt_bottom,
-    );
-    // Capa de césped.
-    let grass_h = 4.0 * px;
-    p.rect_filled(
-        Rect::from_min_max(
-            rect.left_top(),
-            [rect.right(), rect.top() + grass_h].into(),
-        ),
-        0.0,
-        grass,
-    );
-    // Borde irregular: dientes de hierba alternados.
-    let tooth = 2.0 * px;
-    let mut x = rect.left();
-    let mut down = true;
-    while x < rect.right() {
-        let w = tooth.min(rect.right() - x);
-        let h = if down { grass_h + 2.5 * px } else { grass_h };
-        p.rect_filled(
-            Rect::from_min_max(
-                [x, rect.top()].into(),
-                [x + w, rect.top() + h].into(),
-            ),
-            0.0,
-            grass,
-        );
-        x += w;
-        down = !down;
-    }
-    // Marco sutil.
-    p.rect_stroke(
-        rect,
-        CornerRadius::same((size * 0.18) as u8),
-        Stroke::new(1.0_f32, BORDER),
-        egui::StrokeKind::Inside,
-    );
+/// Ficha compacta «etiqueta / valor» para las cabeceras (RAM, versión, ruta…).
+pub fn chip(ui: &mut egui::Ui, label: &str, value: &str) {
+    egui::Frame::new()
+        .fill(INPUT)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(label).size(10.5).color(MUTED));
+                ui.label(RichText::new(value).size(13.0).family(semibold()).color(TEXT));
+            });
+        });
 }
 
 // ── Contenedores y botones ───────────────────────────────────────────────────
 
-/// Tarjeta estándar: fondo CARD, borde sutil y esquinas redondeadas.
+/// Tarjeta estándar: fondo CARD, borde sutil, sombra suave y esquinas redondeadas.
 pub fn card(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(CARD)
         .stroke(Stroke::new(1.0_f32, BORDER))
         .corner_radius(CornerRadius::same(RADIUS as u8))
+        .shadow(shadow())
         .inner_margin(egui::Margin::same(14))
         .show(ui, body);
 }
@@ -469,7 +562,8 @@ pub fn section_toggle(
         Stroke::new(1.0_f32, BORDER),
         egui::StrokeKind::Inside,
     );
-    let icon = if open { "-" } else { "+" };
+    // Chevron en vez de +/-: se lee como «hay más aquí dentro» de un vistazo.
+    let icon = if open { "▾" } else { "▸" };
     p.text(
         [rect.left() + 12.0, rect.center().y].into(),
         Align2::LEFT_CENTER,

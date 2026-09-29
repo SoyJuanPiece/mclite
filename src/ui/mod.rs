@@ -3,6 +3,7 @@
 //! No hay lógica del launcher aquí: los callbacks leen y escriben el estado de
 //! `app::McLiteApp` y delegan en `core` / `loaders` para todo lo demás.
 
+pub mod crash;
 pub mod edit_instance;
 pub mod home;
 pub mod icons;

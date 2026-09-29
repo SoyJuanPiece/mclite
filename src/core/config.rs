@@ -65,6 +65,16 @@ pub struct LauncherConfig {
     /// Avisar de versiones nuevas consultando GitHub al arrancar.
     #[serde(default = "default_true")]
     pub check_updates: bool,
+    /// Minimizar la ventana al lanzar el juego (así el launcher no roba CPU ni
+    /// foco mientras juegas). Al terminar la partida, la ventana vuelve sola.
+    #[serde(default = "default_true")]
+    pub minimize_on_play: bool,
+    /// Afinar la JVM del juego (G1 + parámetros pensados para Minecraft).
+    #[serde(default = "default_true")]
+    pub optimized_jvm: bool,
+    /// Al fallar el juego, abrir el panel con los logs del crash en pantalla.
+    #[serde(default = "default_true")]
+    pub crash_logs_auto: bool,
     /// Migración 0.9.6 ya hecha: las instancias OptiFine creadas antes guardaban
     /// como «última estable» la primera entrada de BMCLAPI (a veces una serie
     /// vieja). Una única vez se reinstallan con la última de verdad.
@@ -117,6 +127,9 @@ impl Default for LauncherConfig {
             window: None,
             accent: None,
             check_updates: true,
+            minimize_on_play: true,
+            optimized_jvm: true,
+            crash_logs_auto: true,
             optifine_migrated: false,
         }
     }
@@ -307,6 +320,21 @@ mod tests {
         config.check_updates = false;
         config.save(&paths).unwrap();
         assert!(!LauncherConfig::load(&paths).check_updates);
+    }
+
+    #[test]
+    fn los_ajustes_de_rendimiento_vienen_encendidos() {
+        let paths = temp_root("rendimiento");
+        let config = LauncherConfig::load(&paths);
+        assert!(config.minimize_on_play);
+        assert!(config.optimized_jvm);
+        assert!(config.crash_logs_auto);
+
+        // Y una config vieja (sin los campos) hereda los valores por defecto.
+        paths.ensure().unwrap();
+        std::fs::write(paths.config_file(), r#"{"ram_mb":2048}"#).unwrap();
+        let vieja = LauncherConfig::load(&paths);
+        assert!(vieja.minimize_on_play && vieja.optimized_jvm && vieja.crash_logs_auto);
     }
 
     #[test]

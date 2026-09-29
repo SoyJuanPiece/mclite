@@ -14,7 +14,8 @@ use crate::ui::{theme, widgets};
 
 /// Fila del lateral. Se pinta el fondo a mano y el contenido con un ui hijo
 /// anclado al rect (permite mezclar imagen de icono y textos). `dot` añade un
-/// círculo de color; `icon` una miniatura (URL, p. ej. icono de un pack).
+/// círculo de color; `icon` una miniatura (URL, p. ej. icono de un pack) y
+/// `block` un bloque de Minecraft para las instancias sin icono propio.
 fn side_item(
     ui: &mut Ui,
     paths: &crate::core::paths::Paths,
@@ -23,6 +24,7 @@ fn side_item(
     sub: Option<&str>,
     dot: Option<Color32>,
     icon: Option<&str>,
+    block: Option<&str>,
     title_color: Color32,
 ) -> egui::Response {
     let height = if sub.is_some() { 44.0 } else { 32.0 };
@@ -70,6 +72,11 @@ fn side_item(
                         .rect_filled(icon_rect, CornerRadius::same(6), theme::SIDEBAR);
                 }
             }
+            ui.add_space(8.0);
+        } else if let Some(seed) = block {
+            // Bloque determinista por nombre: cada instancia tiene su cara, sin
+            // depender de la red ni de que el pack traiga icono.
+            let _ = theme::block_icon(ui, seed, 26.0);
             ui.add_space(8.0);
         } else if let Some(color) = dot {
             let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
@@ -179,7 +186,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             if side_item(
                 ui,
                 &app.paths,
-                screen == Screen::Home, "▶  Jugar", None, None, None, theme::TEXT)
+                screen == Screen::Home, "▶  Jugar", None, None, None, None, theme::TEXT)
                 .clicked()
             {
                 go_home = true;
@@ -189,6 +196,7 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 &app.paths,
                 screen == Screen::Settings,
                 "⚙  Ajustes",
+                None,
                 None,
                 None,
                 None,
@@ -354,6 +362,9 @@ fn handle_instance_row(
         Some(&row.sub),
         Some(widgets::loader_color(row.loader)),
         row.icon.as_deref(),
+        // Sin icono de pack, un bloque por nombre (y el color del cargador
+        // sigue estando en el badge de la ficha de la instancia).
+        row.icon.is_none().then_some(row.name.as_str()),
         theme::TEXT,
     );
     if response.clicked() {

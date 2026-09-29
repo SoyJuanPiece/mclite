@@ -248,7 +248,9 @@ fn hero(
                         }
                     }
                 } else {
-                    theme::avatar(ui, nick, 46.0);
+                    // Sin icono de pack: el bloque que le tocó por nombre. Es
+                    // reconocible, siempre pinta igual y no necesita red.
+                    let _ = theme::block_icon(ui, name, 46.0);
                 }
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -305,13 +307,15 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         return;
     };
 
-    let busy = app.job.is_some();
+    // Ocupado = descargando algo O una partida en curso (no se lanzan dos juegos).
+    let busy = app.job.is_some() || app.playing.is_some();
     let confirm = app.confirm_delete.as_deref() == Some(slug);
     let mut action: Option<Action> = None;
     let mut open_dir = false;
     let mut open_logs_dir = false;
     let mut open_log: Option<std::path::PathBuf> = None;
     let mut open_shots = false;
+    let mut open_crash_panel = false;
     let nick = app.config.username_or_default();
 
     // Refrescar mods/capturas solo cuando cambia la instancia (o tras acciones).
@@ -602,52 +606,62 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         }
     }
 
-    // ── Aviso de crash de la última partida ─────────────────────────
+    // ── Crash de la última partida: los logs, a un clic ──────────────────────
     if let Some(exit) = &app.last_game_exit {
         if !exit.ok {
             ui.add_space(6.0);
             egui::Frame::new()
                 .fill(Color32::from_rgb(0x2A, 0x18, 0x18))
                 .stroke(Stroke::new(1.0_f32, theme::DANGER))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(10))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "⚠ La última partida se cerró inesperadamente ({})",
-                            exit.cause.as_deref().unwrap_or("causa desconocida")
-                        ))
-                        .color(theme::DANGER),
-                    );
-                    // Lo relevante de una sesión de juego vive en tres sitios:
-                    // el espejo propio (logs/crash/), el gameDir (latest.log,
-                    // hs_err de la JVM, crash report de Mojang) y la carpeta
-                    // de sesión. Los botones van del más cercano al más general.
                     ui.horizontal(|ui| {
-                        if theme::ghost_button(ui, "Log del juego").clicked() {
-                            open_log = Some(exit.log_path.clone());
+                        ui.label(RichText::new("⚠").size(20.0).color(theme::DANGER));
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new("La última partida se cerró inesperadamente")
+                                    .strong()
+                                    .color(theme::DANGER),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    exit.cause.as_deref().unwrap_or("causa desconocida"),
+                                )
+                                .size(13.0)
+                                .color(theme::TEXT),
+                            );
+                        });
+                    });
+                    ui.add_space(6.0);
+                    // Todos los ficheros que dejó la sesión, en el mismo panel;
+                    // abrir la carpeta queda para cuando quieras el original.
+                    ui.horizontal_wrapped(|ui| {
+                        if theme::primary_button(ui, "Ver los logs aquí", egui::vec2(160.0, 30.0))
+                            .clicked()
+                        {
+                            open_crash_panel = true;
                         }
-                        if let Some(latest) = &exit.game_latest_log {
-                            if theme::ghost_button(ui, "latest.log (Minecraft)").clicked() {
-                                open_log = Some(latest.clone());
+                        for (label, path) in exit.reports().iter().skip(1) {
+                            if theme::ghost_button(ui, label).clicked() {
+                                open_log = Some(path.clone());
                             }
                         }
-                        if let Some(jvm) = &exit.jvm_log {
-                            if theme::ghost_button(ui, "Log JVM (shaders/driver)").clicked() {
-                                open_log = Some(jvm.clone());
+                        if let Some(dir) = &exit.crash_dir {
+                            if theme::ghost_button(ui, "Expediente").clicked() {
+                                open_log = Some(dir.join("resumen.txt"));
                             }
                         }
-                        if let Some(report) = &exit.crash_report {
-                            if theme::ghost_button(ui, "Crash report").clicked() {
-                                open_log = Some(report.clone());
-                            }
-                        }
-                        // Toda la sesión: mirrors, dumps y lo que el juego haya
-                        // escrito en su carpeta.
-                        if theme::ghost_button(ui, "Carpeta logs/crash").clicked() {
+                        if theme::ghost_button(ui, "Carpeta de logs").clicked() {
                             open_logs_dir = true;
                         }
                     });
+                    if let Some(dir) = &exit.crash_dir {
+                        ui.label(theme::muted(format!(
+                            "Todo guardado en {}",
+                            widgets::collapse(&dir.display().to_string(), 74)
+                        )));
+                    }
                 });
         }
     }
@@ -700,10 +714,14 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         }
     }
     if open_logs_dir {
-        let dir = app.paths.logs().join("crash");
+        let dir = app.paths.crash_logs_root();
         if let Err(err) = crate::core::shell::open_in_explorer(&dir) {
             app.error = Some(err.to_string());
         }
+    }
+
+    if open_crash_panel {
+        app.open_crash_panel();
     }
 
     match action {

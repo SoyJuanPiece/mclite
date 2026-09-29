@@ -169,6 +169,57 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 app.settings_open = if open { None } else { Some("APPEARANCE") };
             }
 
+            // ── Rendimiento ──────────────────────────────────────────────────
+            let open = app.settings_open == Some("PERF");
+            let perf_hint = if app.config.optimized_jvm {
+                "JVM optimizada".to_string()
+            } else {
+                "JVM por defecto".to_string()
+            };
+            let toggled = theme::section_toggle(ui, open, "RENDIMIENTO", &perf_hint, |ui| {
+                let mut minimize = app.config.minimize_on_play;
+                if ui
+                    .checkbox(&mut minimize, "Minimizar el launcher al lanzar el juego")
+                    .changed()
+                {
+                    app.config.minimize_on_play = minimize;
+                    config_dirty = true;
+                }
+                ui.label(theme::muted(
+                    "La ventana se va a la barra de tareas mientras juegas y vuelve sola al salir.",
+                ));
+                ui.add_space(4.0);
+                let mut jvm = app.config.optimized_jvm;
+                if ui
+                    .checkbox(&mut jvm, "Afinar la JVM del juego (G1 para Minecraft)")
+                    .changed()
+                {
+                    app.config.optimized_jvm = jvm;
+                    config_dirty = true;
+                }
+                ui.label(theme::muted(
+                    "Menos tirones por recolector de basura. Se aplica al lanzar; apágalo si un mod viejo se queja.",
+                ));
+                ui.add_space(4.0);
+                let mut crash = app.config.crash_logs_auto;
+                if ui
+                    .checkbox(
+                        &mut crash,
+                        "Abrir los logs automáticamente cuando el juego falla",
+                    )
+                    .changed()
+                {
+                    app.config.crash_logs_auto = crash;
+                    config_dirty = true;
+                }
+                ui.label(theme::muted(
+                    "Si el juego se cierra solo, el panel con los logs aparece encima de esta ventana.",
+                ));
+            });
+            if toggled {
+                app.settings_open = if open { None } else { Some("PERF") };
+            }
+
             // ── Cuenta ───────────────────────────────────────────────────────
             let open = app.settings_open == Some("ACCOUNT");
             let toggled = theme::section_toggle(ui, open, "CUENTA OFFLINE", "", |ui| {
@@ -484,19 +535,25 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                     app.paths.instances_file().display()
                 )));
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.button("Abrir carpeta").clicked() {
                         open_dir = Some(app.paths.root().to_path_buf());
                     }
-                    if ui.button("Abrir logs").clicked() {
+                    if ui.button("Log del launcher").clicked() {
                         open_dir = Some(app.paths.logs());
                     }
-                    if ui.button("Abrir crashes").clicked() {
-                        open_dir = Some(app.paths.logs().join("crash"));
+                    if ui.button("Sesiones de juego").clicked() {
+                        open_dir = Some(app.paths.game_logs_root());
+                    }
+                    if ui.button("Crashes").clicked() {
+                        open_dir = Some(app.paths.crash_logs_root());
+                    }
+                    if ui.button("Mods").clicked() {
+                        open_dir = Some(app.paths.mod_logs_root());
                     }
                 });
                 ui.label(theme::muted(
-                    "launcher.log = arranque del launcher · crash/ = un log por partida (FECHA_HORA_instancia__OK|CRASH.log); un crash también deja su rastro en la instancia: crash-reports/, logs/latest.log y hs_err_pid*.log de la JVM",
+                    "logs/launcher.log = arranque del launcher · logs/game/<instancia>/ = una sesión completa por partida (__OK | __CRASH) · logs/mods/<instancia>/ = solo lo de mods · logs/crash/<instancia>/<fecha>/ = expediente autocontenido del fallo (tu sesión, el crash report de Mojang, el hs_err de la JVM y latest.log).",
                 ));
             });
             if toggled {

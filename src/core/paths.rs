@@ -12,6 +12,11 @@ use crate::core::error::Result;
 /// ├── libraries/...
 /// ├── assets/indexes/ | objects/ | log_configs/
 /// ├── runtime/<componente-java>/
+/// ├── logs/
+/// │   ├── launcher.log              arranque del launcher
+/// │   ├── game/<slug>/<fecha>__OK|__CRASH.log   sesión completa del juego
+/// │   ├── crash/<slug>/<fecha>/     expediente autocontenido de un crash
+/// │   └── mods/<slug>/<fecha>.log   solo lo relacionado con mods
 /// └── instances/<slug>/        gameDir real de cada instancia
 /// ```
 ///
@@ -74,6 +79,9 @@ impl Paths {
             self.runtime(),
             self.instances(),
             self.logs(),
+            self.game_logs_root(),
+            self.crash_logs_root(),
+            self.mod_logs_root(),
         ] {
             std::fs::create_dir_all(&dir).map_err(|e| crate::Error::io(dir, e))?;
         }
@@ -152,8 +160,45 @@ impl Paths {
         self.instances().join(sanitize(slug))
     }
 
+    /// Carpeta raíz de logs. Dentro vive todo lo que se puede mirar para depurar:
+    /// el log del launcher, las sesiones de juego, los crashes y los mods.
     pub fn logs(&self) -> PathBuf {
         self.root.join("logs")
+    }
+
+    /// Log de arranque del launcher (`logs/launcher.log`).
+    pub fn launcher_log(&self) -> PathBuf {
+        self.logs().join("launcher.log")
+    }
+
+    /// Raíz de las sesiones de juego (`logs/game/`).
+    pub fn game_logs_root(&self) -> PathBuf {
+        self.logs().join("game")
+    }
+
+    /// Sesiones de una instancia: `logs/game/<slug>/`.
+    pub fn game_logs(&self, slug: &str) -> PathBuf {
+        self.game_logs_root().join(sanitize(slug))
+    }
+
+    /// Raíz de los expedientes de crash (`logs/crash/`).
+    pub fn crash_logs_root(&self) -> PathBuf {
+        self.logs().join("crash")
+    }
+
+    /// Expedientes de crash de una instancia: `logs/crash/<slug>/`.
+    pub fn crash_logs(&self, slug: &str) -> PathBuf {
+        self.crash_logs_root().join(sanitize(slug))
+    }
+
+    /// Raíz de los logs de mods (`logs/mods/`).
+    pub fn mod_logs_root(&self) -> PathBuf {
+        self.logs().join("mods")
+    }
+
+    /// Logs de mods de una instancia: `logs/mods/<slug>/`.
+    pub fn mod_logs(&self, slug: &str) -> PathBuf {
+        self.mod_logs_root().join(sanitize(slug))
     }
 
     /// `.mrpack` descargados, antes de instalarlos.
@@ -202,6 +247,15 @@ mod tests {
         assert_eq!(sanitize(".."), "_");
         assert_eq!(sanitize(""), "_");
         assert_eq!(sanitize("1.21.4"), "1.21.4");
+    }
+
+    #[test]
+    fn los_logs_van_por_carpetas() {
+        let p = Paths::with_root("/tmp/mclite-test");
+        assert_eq!(p.launcher_log(), PathBuf::from("/tmp/mclite-test/logs/launcher.log"));
+        assert_eq!(p.game_logs("Mi Pack"), PathBuf::from("/tmp/mclite-test/logs/game/Mi_Pack"));
+        assert_eq!(p.crash_logs("Mi Pack"), PathBuf::from("/tmp/mclite-test/logs/crash/Mi_Pack"));
+        assert_eq!(p.mod_logs("Mi Pack"), PathBuf::from("/tmp/mclite-test/logs/mods/Mi_Pack"));
     }
 
     #[test]
