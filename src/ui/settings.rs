@@ -220,6 +220,45 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
                 app.settings_open = if open { None } else { Some("PERF") };
             }
 
+            // ── Renderizado ────────────────────────────────────────────
+            let open = app.settings_open == Some("RENDER");
+            let render_mode = app
+                .config
+                .renderer
+                .as_deref()
+                .and_then(crate::render::Mode::parse)
+                .unwrap_or_default();
+            let toggled =
+                theme::section_toggle(ui, open, "RENDERIZADO", render_mode.label(), |ui| {
+                    ui.label(theme::muted(
+                        "Cómo se pinta la ventana. Si alguna vez se ve sin letras \
+                         (solo formas y botones), cambia a OpenGL: es el camino \
+                         que mejor aguanta drivers viejos.",
+                    ));
+                    ui.add_space(4.0);
+                    for mode in [
+                        crate::render::Mode::Auto,
+                        crate::render::Mode::Gl,
+                        crate::render::Mode::WgpuGl,
+                    ] {
+                        let chosen = render_mode == mode;
+                        if ui.selectable_label(chosen, mode.label()).clicked() {
+                            app.config.renderer = Some(mode.key().to_string());
+                            config_dirty = true;
+                        }
+                        ui.label(theme::muted(mode.hint()));
+                        ui.add_space(2.0);
+                    }
+                    ui.label(theme::muted(
+                        "Se aplica al volver a abrir el launcher. Prueba rápida \
+                         sin tocar los ajustes: `mclite --renderer gl` (o la \
+                         variable de entorno MCLITE_RENDERER).",
+                    ));
+                });
+            if toggled {
+                app.settings_open = if open { None } else { Some("RENDER") };
+            }
+
             // ── Cuenta ───────────────────────────────────────────────────────
             let open = app.settings_open == Some("ACCOUNT");
             let toggled = theme::section_toggle(ui, open, "CUENTA OFFLINE", "", |ui| {

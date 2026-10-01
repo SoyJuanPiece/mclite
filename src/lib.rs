@@ -9,6 +9,8 @@ pub mod loaders;
 #[cfg(feature = "gui")]
 pub mod app;
 #[cfg(feature = "gui")]
+pub mod render;
+#[cfg(feature = "gui")]
 pub mod ui;
 
 pub use core::error::{Error, Result};

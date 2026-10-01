@@ -25,12 +25,19 @@ thiserror = "2"
 egui = { version = "0.32", optional = true }
 eframe = { version = "0.32", optional = true, default-features = false, features = [
     "wgpu",
+    # OpenGL (glow) como segundo renderer: hay GPUs donde wgpu pinta la UI sin
+    # letras (pierde las subidas parciales del atlas de fuentes) y el camino
+    # de OpenGL las sube bien. Ver `src/render.rs`.
+    "glow",
     "default_fonts",
     # Backends de escritorio de winit: en Windows son un no-op, en Linux
     # hacen falta para que winit compile (sin ellos, compile_error!).
     "x11",
     "wayland",
 ] }
+# Espera bloqueante para la prueba de GPU de `render.rs` (el mismo crate que
+# usa eframe por dentro).
+pollster = { version = "0.4", optional = true }
 # Backends de render de wgpu. Sin esto, pánico al arrancar:
 # "No wgpu backend feature that is implemented for the target platform was
 # enabled" — porque apagamos los defaults de eframe y su feature `wgpu` solo
@@ -52,7 +59,7 @@ winresource = "0.1"
 
 [features]
 default = ["gui"]
-gui = ["dep:egui", "dep:eframe"]
+gui = ["dep:egui", "dep:eframe", "dep:pollster"]
 
 [profile.release]
 lto = "fat"

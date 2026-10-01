@@ -80,6 +80,10 @@ pub struct LauncherConfig {
     /// vieja). Una única vez se reinstallan con la última de verdad.
     #[serde(default)]
     pub optifine_migrated: bool,
+    /// Backend de render de la ventana: "auto" (wgpu con caída a OpenGL),
+    /// "gl" (forzar OpenGL) o "wgpu-gl". Ver `render.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<String>,
 }
 
 /// Tamaño de ventana guardado entre sesiones.
@@ -131,6 +135,7 @@ impl Default for LauncherConfig {
             optimized_jvm: true,
             crash_logs_auto: true,
             optifine_migrated: false,
+            renderer: None,
         }
     }
 }

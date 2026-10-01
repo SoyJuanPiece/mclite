@@ -56,6 +56,8 @@ OPCIONES:
   --dry-run             Resuelve y muestra el plan, sin descargar nada pesado.
   --no-assets           Omite los assets (en 1.21 son ~1 GB).
   --no-install          (new) Crea la instancia sin descargar el juego.
+  --renderer <modo>     Backend de la ventana: auto | gl | wgpu-gl.
+  --gl                  Atajo de --renderer gl (si la UI se ve sin letras).
 
 EJEMPLOS:
   mclite versions --snapshots
@@ -65,7 +67,7 @@ EJEMPLOS:
 "#;
 
 /// Flags que consumen el argumento siguiente. El resto son booleanos.
-const FLAGS_WITH_VALUE: [&str; 10] = [
+const FLAGS_WITH_VALUE: [&str; 11] = [
     "root",
     "loader",
     "loader-version",
@@ -76,6 +78,7 @@ const FLAGS_WITH_VALUE: [&str; 10] = [
     "java",
     "name",
     "mc",
+    "renderer",
 ];
 
 fn main() -> ExitCode {
@@ -84,14 +87,17 @@ fn main() -> ExitCode {
     // Sin argumentos, la GUI (feature `gui`) es la cara del launcher; si se
     // compiló sin ella o se pasa cualquier argumento, manda la CLI. Así una
     // sola build sirve para uso interactivo y para scripts.
+    // `--renderer <modo>` (o `--gl`) abre la ventana con ese backend: es la
+    // salida de emergencia cuando en una PC la UI sale sin letras.
+    #[cfg(feature = "gui")]
+    if args.is_empty() || wants_gui(&args) {
+        return mclite::app::run(gui_renderer(&args));
+    }
+
+    #[cfg(not(feature = "gui"))]
     if args.is_empty() {
-        #[cfg(feature = "gui")]
-        return mclite::app::run();
-        #[cfg(not(feature = "gui"))]
-        {
-            println!("{HELP}");
-            return ExitCode::SUCCESS;
-        }
+        println!("{HELP}");
+        return ExitCode::SUCCESS;
     }
 
     match run(&args) {
@@ -101,6 +107,39 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// ¿Estos argumentos abren la ventana? La GUI se abre sin argumentos o
+/// con solo banderas de render (`--renderer <modo>`, `--gl`): cualquier
+/// comando (`versions`, `launch`, …) va a la CLI.
+#[cfg(feature = "gui")]
+fn wants_gui(args: &[String]) -> bool {
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--gl" => {}
+            // `--renderer` consume el valor siguiente; con `=` va junto.
+            "--renderer" => {
+                rest.next();
+            }
+            other if other.starts_with("--renderer=") => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Modo de render pedido desde la CLI. `None` = no se dijo nada:
+/// mandan `MCLITE_RENDERER` y luego `config.json` (ver `app::run`).
+#[cfg(feature = "gui")]
+fn gui_renderer(args: &[String]) -> Option<mclite::render::Mode> {
+    let cli = Cli::parse(args);
+    if cli.has("gl") {
+        return Some(mclite::render::Mode::Gl);
+    }
+    cli.flag("renderer")
+        .filter(|raw| !raw.trim().is_empty())
+        .and_then(mclite::render::Mode::parse)
 }
 
 struct Cli {

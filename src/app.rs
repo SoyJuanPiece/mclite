@@ -2549,6 +2549,11 @@ impl McLiteApp {
 
 /// Registra fallos de arranque en un log junto al exe: con subsistema "windows"
 /// no hay consola, así que un pánico o un error de wgpu moriría en silencio.
+pub(crate) fn report_fatal(message: &str) {
+    crash_log(message);
+    eprintln!("{message}");
+}
+
 fn crash_log(message: &str) {
     let path = std::env::current_exe()
         .ok()
@@ -2578,40 +2583,39 @@ fn install_panic_hook() {
 }
 
 /// Abre la ventana. Sin argumentos en la CLI, la GUI es la cara del launcher.
-pub fn run() -> std::process::ExitCode {
+///
+/// El backend de render se elige en `render::run`: wgpu si la GPU pasa la prueba
+/// de texturas y, si no, OpenGL. `override_mode` viene de `--renderer`/`--gl`;
+/// si es `None` mandan `MCLITE_RENDERER` y luego la config.
+pub fn run(override_mode: Option<crate::render::Mode>) -> std::process::ExitCode {
     install_panic_hook();
 
-    // Restaurar el tamaño de la sesión anterior si lo tenemos guardado.
-    let saved_size = std::fs::read_to_string(
-        Paths::discover()
-            .map(|paths| paths.config_file())
-            .unwrap_or_else(|_| std::path::PathBuf::from("mclite.json")),
-    )
-    .ok()
-    .and_then(|raw| serde_json::from_str::<LauncherConfig>(&raw).ok())
-    .and_then(|config| config.window)
-    .map(|window| [window.width, window.height]);
+    let paths = Paths::discover()
+        .unwrap_or_else(|_| Paths::with_root(std::env::temp_dir().join("mclite")));
+    // El log se abre ANTES de elegir backend: así queda registrado qué GPU hay y
+    // qué intentos se hicieron, que es justo lo que hace falta para diagnosticar
+    // un fallo de render en otra máquina.
+    logging::init(&paths);
+
+    let config = LauncherConfig::load(&paths);
+    let mode = override_mode
+        .or_else(crate::render::Mode::from_env)
+        .or_else(|| config.renderer.as_deref().and_then(crate::render::Mode::parse))
+        .unwrap_or_default();
+
+    let saved_size = config.window.map(|window| [window.width, window.height]);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("McLite {LAUNCHER_VERSION}"))
             .with_inner_size(saved_size.unwrap_or([980.0_f32, 620.0]))
-            .with_min_inner_size([820.0_f32, 520.0]),
+            .with_min_inner_size([820.0_f32, 520.0])
+            // La UI se adapta a cualquier pantalla: si la del usuario es pequeña
+            // (o tiene la escala de Windows al 150 %), la ventana no debe nacer
+            // más grande que el escritorio.
+            .with_maximized(false),
         ..Default::default()
     };
 
-    let result = eframe::run_native(
-        "McLite",
-        options,
-        Box::new(|cc| Ok(Box::new(McLiteApp::new(cc)))),
-    );
-
-    match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(err) => {
-            crash_log(&format!("no pude abrir la ventana: {err}"));
-            eprintln!("no pude abrir la ventana: {err}");
-            std::process::ExitCode::FAILURE
-        }
-    }
+    crate::render::run(mode, "McLite".to_string(), options)
 }
