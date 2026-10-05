@@ -20,6 +20,12 @@ pub enum PerformanceProfile {
     LowRam,
 }
 
+impl Default for PerformanceProfile {
+    fn default() -> Self {
+        PerformanceProfile::Balanced
+    }
+}
+
 pub const PROFILES: [PerformanceProfile; 3] = [
     PerformanceProfile::Balanced,
     PerformanceProfile::Performance,
