@@ -14,6 +14,8 @@ use crate::core::updater;
 use crate::core::logging;
 use crate::core::mrpack;
 use crate::core::msa;
+use crate::core::profiles::{PerformanceProfile, PROFILES};
+use crate::core::sessions::SessionHistory;
 
 use crate::core::config::LauncherConfig;
 use crate::core::http::HttpClient;
@@ -256,6 +258,8 @@ pub struct Form {
     pub height: u32,
     /// Instalar Sodium (solo Fabric): lo baja de Modrinth a mods/ tras crear.
     pub with_sodium: bool,
+    /// Perfil de rendimiento elegido: fija RAM y flags de JVM sugeridos.
+    pub performance_profile: PerformanceProfile,
 }
 
 impl Form {
@@ -275,7 +279,20 @@ impl Form {
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             with_sodium: false,
+            performance_profile: PerformanceProfile::Balanced,
         }
+    }
+}
+
+impl PerformanceProfile {
+    /// Opciones listas para `widgets::segmented`/`segmented_boxed`: todas
+    /// habilitadas, con la descripción como nota al pasar el ratón.
+    pub fn ui_options() -> [(PerformanceProfile, &'static str, bool, Option<&'static str>); 3] {
+        [
+            (PROFILES[0], PROFILES[0].label(), true, Some(PROFILES[0].description())),
+            (PROFILES[1], PROFILES[1].label(), true, Some(PROFILES[1].description())),
+            (PROFILES[2], PROFILES[2].label(), true, Some(PROFILES[2].description())),
+        ]
     }
 }
 
@@ -284,6 +301,8 @@ pub struct McLiteApp {
     pub paths: Paths,
     pub config: LauncherConfig,
     pub store: InstanceStore,
+    /// Historial de sesiones de juego (persistido en `sessions.json`).
+    pub sessions: SessionHistory,
     pub screen: Screen,
     pub selected: Option<String>,
     pub form: Form,
@@ -785,6 +804,7 @@ impl McLiteApp {
         }
         let config = LauncherConfig::load(&paths);
         let store = InstanceStore::load(&paths);
+        let sessions = SessionHistory::load(&paths);
         // Reabrir la última instancia seleccionada (si sigue existiendo).
         let selected = config
             .last_instance
@@ -809,6 +829,7 @@ impl McLiteApp {
             form: Form::new(config.clamped_ram()),
             config,
             store,
+            sessions,
             screen: Screen::Home,
             selected,
             manifest: None,
@@ -1099,6 +1120,11 @@ impl McLiteApp {
                 }
             }
             Message::PlaySession { slug, secs } => {
+                let mc_version = self
+                    .store
+                    .find(&slug)
+                    .map(|instance| instance.mc_version.clone())
+                    .unwrap_or_default();
                 if let Some(instance) = self
                     .store
                     .instances
@@ -1108,6 +1134,9 @@ impl McLiteApp {
                     instance.playtime_secs = Some(instance.playtime_secs.unwrap_or(0) + secs);
                 }
                 let _ = self.store.save(&self.paths);
+                // Historial: una entrada por partida (fecha, versión, duración).
+                self.sessions.record(&slug, &mc_version, &now(), secs);
+                let _ = self.sessions.save(&self.paths);
             }
             Message::MsaCode { code } => {
                 self.msa_login = Some(MsaLogin {
@@ -1346,6 +1375,7 @@ impl McLiteApp {
         self.form.loader_versions.clear();
         self.form.loader_query = None;
         self.form.supported_mcs = None;
+        self.form.performance_profile = instance.performance_profile;
         self.editing_slug = Some(slug.to_string());
         if instance.loader != LoaderKind::Vanilla {
             self.begin_loader_fetch();
@@ -1381,6 +1411,7 @@ impl McLiteApp {
         instance.ram_mb = self.form.ram_mb;
         instance.width = self.form.width;
         instance.height = self.form.height;
+        instance.performance_profile = self.form.performance_profile;
         if let Err(err) = self.store.save(&self.paths) {
             self.error = Some(err.to_string());
             return;
@@ -1646,6 +1677,7 @@ impl McLiteApp {
         instance.ram_mb = self.form.ram_mb;
         instance.width = self.form.width;
         instance.height = self.form.height;
+        instance.performance_profile = self.form.performance_profile;
 
         let slug = match self.store.add(instance, &self.paths) {
             Ok(slug) => slug,
@@ -1799,7 +1831,8 @@ impl McLiteApp {
                 .java_path
                 .clone()
                 .or_else(|| self.config.java_path.clone()),
-            extra_jvm_args: Vec::new(),
+            // Flags extra del perfil de rendimiento (Equilibrado no añade nada).
+            extra_jvm_args: instance.performance_profile.extra_jvm_args(),
             optimize_jvm: self.config.optimized_jvm,
             filter: self.config.version_filter(),
         };
