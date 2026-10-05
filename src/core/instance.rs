@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::config::{DEFAULT_RAM_MB, MAX_RAM_MB, MIN_RAM_MB};
 use crate::core::error::{Error, Result};
 use crate::core::paths::{sanitize, Paths};
+use crate::core::profiles::PerformanceProfile;
 use crate::loaders::LoaderKind;
 
 pub const DEFAULT_WIDTH: u32 = 854;
@@ -52,6 +53,10 @@ pub struct Instance {
     /// Sirve para agruparlas en el lateral.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_pack: Option<String>,
+    /// Perfil de rendimiento elegido: solo da valores por defecto de RAM y
+    /// flags de JVM; el usuario puede seguir editando `ram_mb` a mano.
+    #[serde(default)]
+    pub performance_profile: PerformanceProfile,
 }
 
 /// La edición (nombre/RAM/cargador) y la reparación mutan la instancia sin
@@ -116,6 +121,7 @@ impl Instance {
             notes: None,
             icon: None,
             from_pack: None,
+            performance_profile: PerformanceProfile::Balanced,
         }
     }
 
