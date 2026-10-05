@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release exe (gui feature)
+        run: cargo build --release --locked --features gui --bin mclite
+
+      - name: Generate SHA-256 for the exe
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "target/release/mclite.exe").Hash.ToLower()
+          "$hash  mclite.exe" | Out-File -Encoding ascii -NoNewline "target/release/mclite.exe.sha256"
+          Write-Host "SHA-256: $hash"
+
+      - name: Verify version embedded in exe matches the tag
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+          $cargoVersion = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          if ($tagVersion -ne $cargoVersion) {
+            Write-Error "Tag ($tagVersion) no coincide con Cargo.toml ($cargoVersion)"
+            exit 1
+          }
+          Write-Host "OK: tag y Cargo.toml coinciden en $cargoVersion"
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/mclite.exe
+            target/release/mclite.exe.sha256
+          fail_on_unmatched_files: true
