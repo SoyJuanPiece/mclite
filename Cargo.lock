@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "mclite"
-version = "0.9.11"
+version = "0.9.13"
 dependencies = [
  "base64 0.22.1",
  "dirs",
