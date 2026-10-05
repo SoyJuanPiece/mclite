@@ -6,6 +6,7 @@
 
 use egui::Ui;
 
+use crate::core::profiles::PerformanceProfile;
 use crate::loaders::{LoaderKind, ALL_KINDS};
 use crate::app::McLiteApp;
 use crate::ui::{theme, widgets};
@@ -154,6 +155,20 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
             });
             if toggled {
                 app.form_open = if open { None } else { Some("LOADER") };
+            }
+
+            let open = app.form_open == Some("PROFILE");
+            let profile_hint = app.form.performance_profile.label().to_string();
+            let toggled = theme::section_toggle(ui, open, "RENDIMIENTO", &profile_hint, |ui| {
+                let profile_options = PerformanceProfile::ui_options();
+                if let Some(chosen) = widgets::segmented(ui, app.form.performance_profile, &profile_options) {
+                    app.form.performance_profile = chosen;
+                    app.form.ram_mb = chosen.ram_mb();
+                }
+                ui.label(theme::muted(app.form.performance_profile.description()));
+            });
+            if toggled {
+                app.form_open = if open { None } else { Some("PROFILE") };
             }
 
             let open = app.form_open == Some("OPTS");
