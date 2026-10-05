@@ -12,33 +12,49 @@ use egui::{
 };
 
 pub const ACCENT: Color32 = Color32::from_rgb(0x3C, 0x85, 0x27);
-/// Fondo general (panel central).
-pub const BG: Color32 = Color32::from_rgb(0x0E, 0x11, 0x0E);
-/// Panel lateral y barra de estado.
-pub const SIDEBAR: Color32 = Color32::from_rgb(0x15, 0x19, 0x15);
+/// Fondo general (panel central): casi negro con un leve tinte frío, estilo
+/// "glass UI" (CMClient-like) en vez de un verde plano.
+pub const BG: Color32 = Color32::from_rgb(0x0A, 0x0C, 0x0B);
+/// Panel lateral y barra de estado: un escalón más claro que el fondo.
+pub const SIDEBAR: Color32 = Color32::from_rgb(0x12, 0x15, 0x13);
 /// Tarjetas.
-pub const CARD: Color32 = Color32::from_rgb(0x1B, 0x20, 0x1B);
-/// Tarjeta elevada (hover / cabecera de detalle).
-pub const CARD_ELEVATED: Color32 = Color32::from_rgb(0x22, 0x28, 0x22);
+pub const CARD: Color32 = Color32::from_rgb(0x17, 0x1B, 0x18);
+/// Tarjeta elevada (hover / cabecera de detalle): más contraste para dar
+/// sensación de "vidrio" iluminado por el acento.
+pub const CARD_ELEVATED: Color32 = Color32::from_rgb(0x20, 0x27, 0x22);
 /// Fondo de los campos de texto.
-pub const INPUT: Color32 = Color32::from_rgb(0x0A, 0x0D, 0x0A);
-pub const TEXT: Color32 = Color32::from_rgb(0xE9, 0xEF, 0xE9);
-pub const MUTED: Color32 = Color32::from_rgb(0x93, 0xA1, 0x93);
-pub const DANGER: Color32 = Color32::from_rgb(0xE0, 0x5D, 0x56);
+pub const INPUT: Color32 = Color32::from_rgb(0x08, 0x0A, 0x09);
+pub const TEXT: Color32 = Color32::from_rgb(0xEE, 0xF3, 0xEE);
+pub const MUTED: Color32 = Color32::from_rgb(0x9A, 0xA7, 0x9C);
+pub const DANGER: Color32 = Color32::from_rgb(0xE5, 0x62, 0x5B);
 /// Borde sutil de tarjetas y separadores.
-pub const BORDER: Color32 = Color32::from_rgb(0x2A, 0x30, 0x2A);
+pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x2E, 0x29);
 
-/// Radio de esquina estándar (tarjetas, botones, inputs).
-const RADIUS: f32 = 10.0;
+/// Radio de esquina estándar (tarjetas, botones, inputs). Más grande que antes
+/// para un look más suave/moderno (estilo CMClient).
+const RADIUS: f32 = 14.0;
 
 /// Sombra suave y reutilizable: da profundidad a tarjetas y paneles flotantes sin
 /// manchar el fondo. `egui` no trae sombras por defecto en los `Frame`.
 pub fn shadow() -> egui::epaint::Shadow {
     egui::epaint::Shadow {
-        offset: [0, 4],
-        blur: 14,
+        offset: [0, 6],
+        blur: 22,
         spread: 0,
-        color: Color32::from_black_alpha(70),
+        color: Color32::from_black_alpha(90),
+    }
+}
+
+/// Sombra con resplandor del acento activo: para tarjetas destacadas (botón
+/// "Jugar", instancia seleccionada) — el efecto "glow" característico de
+/// launchers modernos tipo CMClient.
+pub fn glow_shadow() -> egui::epaint::Shadow {
+    let [r, g, b, _] = accent().to_array();
+    egui::epaint::Shadow {
+        offset: [0, 0],
+        blur: 28,
+        spread: 1,
+        color: Color32::from_rgba_unmultiplied(r, g, b, 60),
     }
 }
 
@@ -202,11 +218,11 @@ pub fn apply(ctx: &egui::Context) {
         .text_styles
         .insert(TextStyle::Small, FontId::new(12.0, FontFamily::Proportional));
 
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-    style.spacing.button_padding = egui::vec2(14.0, 6.0);
-    style.spacing.menu_margin = egui::Margin::same(8);
-    // Transiciones suaves de hover/selección en toda la app.
-    style.animation_time = 0.16;
+    style.spacing.item_spacing = egui::vec2(12.0, 10.0);
+    style.spacing.button_padding = egui::vec2(16.0, 8.0);
+    style.spacing.menu_margin = egui::Margin::same(10);
+    // Transiciones más vivas (estilo CMClient: hover/selección se notan al tacto).
+    style.animation_time = 0.12;
 
     let mut visuals = Visuals::dark();
     visuals.panel_fill = BG;
@@ -673,4 +689,30 @@ pub fn selected_card(
         .inner_margin(egui::Margin::same(12))
         .show(ui, body)
         .response
+}
+// ── Tarjetas "vidrio" con resplandor (estilo CMClient) ───────────────────────
+
+/// Dibuja un `Frame` tipo tarjeta de vidrio: fondo elevado, borde sutil del
+/// acento y sombra con resplandor. Pensado para la tarjeta de instancia
+/// seleccionada o el panel de "Jugar".
+pub fn glass_card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(CARD_ELEVATED)
+        .stroke(Stroke::new(1.0_f32, accent().gamma_multiply(0.55)))
+        .corner_radius(CornerRadius::same(RADIUS as u8))
+        .shadow(glow_shadow())
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, add_contents);
+}
+
+/// Tarjeta plana estándar (sin resplandor), para listas e instancias no
+/// seleccionadas: mismo radio y tipografía que `glass_card`, sombra normal.
+pub fn flat_card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .corner_radius(CornerRadius::same(RADIUS as u8))
+        .shadow(shadow())
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, add_contents);
 }

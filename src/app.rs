@@ -1123,7 +1123,7 @@ impl McLiteApp {
                     Ok(session) => {
                         self.msa_session = Some(session);
                         self.notify(
-                            format!("Sesión iniciada como {}", self.msa_session.as_ref().unwrap().username),
+                            format!("Sesión iniciada como {}", session.username),
                             ToastKind::Ok,
                         );
                     }
@@ -1153,7 +1153,7 @@ impl McLiteApp {
                 self.status = format!("McLite {version} disponible");
                 self.update_available = Some((version, url));
                 self.notify(
-                    format!("Nueva versión {} disponible", self.update_available.as_ref().unwrap().0),
+                    format!("Nueva versión {version} disponible"),
                     ToastKind::Ok,
                 );
             }
