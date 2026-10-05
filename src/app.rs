@@ -1121,11 +1121,11 @@ impl McLiteApp {
                 self.msa_login = None;
                 match result {
                     Ok(session) => {
-                        self.msa_session = Some(session);
                         self.notify(
                             format!("Sesión iniciada como {}", session.username),
                             ToastKind::Ok,
                         );
+                        self.msa_session = Some(session);
                     }
                     Err(err) => {
                         self.notify(format!("No se pudo iniciar sesión: {err}"), ToastKind::Error);
@@ -1151,11 +1151,11 @@ impl McLiteApp {
             }
             Message::UpdateAvailable { version, url } => {
                 self.status = format!("McLite {version} disponible");
-                self.update_available = Some((version, url));
                 self.notify(
                     format!("Nueva versión {version} disponible"),
                     ToastKind::Ok,
                 );
+                self.update_available = Some((version, url));
             }
             Message::UpdateReady => {
                 self.job = None;
