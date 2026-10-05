@@ -131,15 +131,18 @@ pub fn show(app: &mut McLiteApp, ui: &mut Ui) {
 }
 
 fn welcome(ui: &mut Ui, app: &mut McLiteApp) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        theme::grass_block(ui, 84.0);
-        ui.add_space(8.0);
-        ui.label(theme::title("McLite"));
-        ui.add_space(4.0);
-        ui.label(theme::muted("Launcher lite de Minecraft · cuentas offline"));
-        ui.add_space(16.0);
+    theme::glass_card(ui, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            theme::grass_block(ui, 84.0);
+            ui.add_space(8.0);
+            ui.label(theme::title("McLite"));
+            ui.add_space(4.0);
+            ui.label(theme::muted("Launcher lite de Minecraft · cuentas offline"));
+            ui.add_space(8.0);
+        });
     });
+    ui.add_space(10.0);
 
     // Onboarding de 2 clics: nick + acento + crear, todo en una tarjeta.
     let mut dirty = false;
@@ -220,6 +223,7 @@ fn hero(
     loader: crate::loaders::LoaderKind,
     mc: &str,
     loader_version: Option<&str>,
+    profile_label: &str,
 ) {
     let inner = egui::Frame::new()
         .fill(Color32::from_rgb(0x1B, 0x2B, 0x1B))
@@ -271,6 +275,7 @@ fn hero(
                 if let Some(version) = loader_version {
                     widgets::badge(ui, version, theme::CARD_ELEVATED);
                 }
+                widgets::badge(ui, profile_label, theme::accent_soft().gamma_multiply(0.6));
             });
             ui.add_space(2.0);
         });
@@ -375,17 +380,24 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
         instance.loader,
         &instance.mc_version,
         instance.loader_version.as_deref(),
+        instance.performance_profile.label(),
     );
     ui.add_space(14.0);
 
     // ── Acciones: JUGAR + columna de gestión a la derecha ────────────────────
     ui.horizontal(|ui| {
         let width = ui.available_width() - 130.0;
-        let play = egui::Button::new(RichText::new("▶  JUGAR").size(22.0).strong())
+        let play = egui::Button::new(
+            RichText::new("▶  JUGAR").size(22.0).strong().color(Color32::WHITE),
+        )
         .fill(theme::accent())
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(14))
         .min_size(egui::vec2(width, 58.0));
-        if ui.add_enabled(!busy, play).clicked() {
+        let play_response = egui::Frame::new()
+            .shadow(theme::glow_shadow())
+            .show(ui, |ui| ui.add_enabled(!busy, play))
+            .inner;
+        if play_response.clicked() {
             action = Some(Action::Play);
         }
 
@@ -547,6 +559,39 @@ fn detail(ui: &mut Ui, app: &mut McLiteApp, slug: &str) {
     });
     if toggled {
         app.form_open = if shots_open { None } else { Some("SHOTS") };
+    }
+
+    // ── Historial de sesiones ────────────────────────────────────────────────
+    let history_open = app.form_open == Some("HISTORY");
+    let recent_sessions = app.sessions.for_instance(slug, 10);
+    let history_hint = if recent_sessions.is_empty() {
+        "sin partidas registradas".to_string()
+    } else {
+        format!("{} partidas recientes", recent_sessions.len())
+    };
+    let toggled = theme::section_toggle(ui, history_open, "HISTORIAL", &history_hint, |ui| {
+        if recent_sessions.is_empty() {
+            ui.label(theme::muted(
+                "Aquí aparecerán tus últimas partidas (fecha, versión y duración).",
+            ));
+        } else {
+            for entry in &recent_sessions {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(pretty_timestamp(&entry.started)).size(13.0));
+                    ui.label(theme::muted(format!("· {}", entry.mc_version)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(playtime_label(entry.secs))
+                                .small()
+                                .color(theme::accent_soft()),
+                        );
+                    });
+                });
+            }
+        }
+    });
+    if toggled {
+        app.form_open = if history_open { None } else { Some("HISTORY") };
     }
 
     // ── Backup (Fase 4) ──────────────────────────────────────────────────────
